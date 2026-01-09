@@ -168,9 +168,54 @@ class PaymentMonitorBot:
             self.save_processed_txs()
 
 
+import requests
+import sys
+from config import GETBLOCK_BSC_NODE
+
+def check_connectivity():
+    errors = []
+    print("Перевірка доступу до BSC Node (GetBlock)...")
+    try:
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_blockNumber",
+            "params": [],
+            "id": 1
+        }
+        headers = {"Content-Type": "application/json"}
+        resp = requests.post(GETBLOCK_BSC_NODE, json=payload, headers=headers, timeout=20)
+        resp.raise_for_status()
+        res = resp.json()
+        assert "result" in res, "Відповідь не містить поля 'result'"
+        print(f"✅ GetBlock OK. Номер останнього блоку: {int(res['result'], 16)}")
+    except Exception as e:
+        errors.append(f"❌ GetBlock API не працює: {repr(e)} -> {getattr(e, 'response', None) and getattr(e.response, 'text', '')}")
+
+    print("Перевірка надсилання повідомлень у Telegram...")
+    try:
+        test_bot = PaymentMonitorBot().telegram
+        msg = "🤖 Тест старту: Бот має доступ до GetBlock та Telegram!"
+        ok = test_bot.send_message(msg)
+        if ok:
+            print("✅ Telegram OK: тестове повідомлення відправлено.")
+        else:
+            raise Exception("Telegram повернув помилку, повідомлення не відправлено")
+    except Exception as e:
+        errors.append(f"❌ Telegram API не працює: {repr(e)}")
+
+    if errors:
+        print("===" )
+        print("❌ Помилки під час старту:")
+        for err in errors:
+            print(" -", err)
+        print("===" )
+        print("BOT EXITED")
+        sys.exit(1)
+    else:
+        test_bot.send_message("✅ Бот стартував: доступ до API підтверджено. Починаю моніторинг!")
+
 if __name__ == "__main__":
+    check_connectivity()
     bot = PaymentMonitorBot()
-    # Надсилаємо тестове повідомлення в Telegram канал про старт бота
-    bot.telegram.send_message("🤖 Бот для моніторингу USDT на BSC ЗАПУЩЕНО та працює!")
     bot.run()
 
