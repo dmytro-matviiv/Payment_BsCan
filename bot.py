@@ -76,6 +76,15 @@ class PaymentMonitorBot:
         # Отримуємо транзакції тільки з нових блоків
         start_block = self.start_block + 1
         blocks_to_check = latest_block - start_block + 1
+        
+        # Обмежуємо кількість блоків для перевірки (максимум 100 блоків за раз)
+        # Це допомагає уникнути занадто довгих перевірок
+        MAX_BLOCKS_TO_CHECK = 100
+        if blocks_to_check > MAX_BLOCKS_TO_CHECK:
+            print(f"⚠️ Занадто багато блоків ({blocks_to_check}), перевіряю тільки останні {MAX_BLOCKS_TO_CHECK}")
+            start_block = latest_block - MAX_BLOCKS_TO_CHECK + 1
+            blocks_to_check = MAX_BLOCKS_TO_CHECK
+        
         print(f"🔎 Перевіряю {blocks_to_check} нових блоків (від {start_block} до {latest_block})")
         
         transactions = self.bscscan.get_token_transactions(

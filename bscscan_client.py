@@ -204,6 +204,84 @@ class BSCscanClient:
             print(f"Помилка отримання деталей транзакції: {e}")
             return None
     
+    def check_transaction_by_hash(self, tx_hash: str) -> Optional[Dict]:
+        """Перевірка конкретної транзакції за хешем та отримання USDT Transfer events"""
+        try:
+            # Отримуємо receipt транзакції
+            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+            
+            # Отримуємо блок для timestamp
+            block = self.w3.eth.get_block(receipt['blockNumber'])
+            timestamp = block['timestamp']
+            
+            # Шукаємо USDT Transfer events
+            address_checksum = Web3.to_checksum_address(WALLET_ADDRESS)
+            
+            for log in receipt['logs']:
+                # Перевіряємо, чи це USDT контракт
+                log_address = log['address']
+                if isinstance(log_address, bytes):
+                    log_address = log_address.hex()
+                if not isinstance(log_address, str):
+                    log_address = str(log_address)
+                if log_address.lower() != self.usdt_contract.lower():
+                    continue
+                
+                # Перевіряємо, чи це Transfer event
+                if len(log['topics']) < 3:
+                    continue
+                
+                # Перевіряємо event signature (topic[0])
+                topic0 = log['topics'][0]
+                if hasattr(topic0, 'hex'):
+                    topic0 = topic0.hex()
+                if topic0.lower() != TRANSFER_EVENT_TOPIC.lower():
+                    continue
+                
+                # Отримуємо адреси
+                topic1 = log['topics'][1]
+                topic2 = log['topics'][2]
+                if hasattr(topic1, 'hex'):
+                    topic1 = topic1.hex()
+                if hasattr(topic2, 'hex'):
+                    topic2 = topic2.hex()
+                
+                from_addr = '0x' + (topic1[-40:] if len(topic1) >= 40 else topic1.zfill(64)[-40:])
+                to_addr = '0x' + (topic2[-40:] if len(topic2) >= 40 else topic2.zfill(64)[-40:])
+                
+                # Перевіряємо, чи це наша адреса
+                if to_addr.lower() != address_checksum.lower():
+                    continue
+                
+                # Отримуємо value
+                data = log['data']
+                if hasattr(data, 'hex'):
+                    value_hex = data.hex()
+                else:
+                    value_hex = data if isinstance(data, str) else '0x'
+                value = int(value_hex, 16) if value_hex != '0x' and value_hex else 0
+                
+                # Форматуємо транзакцію
+                return {
+                    'hash': tx_hash,
+                    'from': from_addr,
+                    'to': to_addr,
+                    'value': str(value),
+                    'tokenSymbol': 'USDT',
+                    'tokenDecimal': '18',
+                    'timeStamp': str(timestamp),
+                    'blockNumber': str(receipt['blockNumber']),
+                    'contractAddress': self.usdt_contract
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"Помилка перевірки транзакції {tx_hash}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     def format_transaction(self, tx: Dict) -> Dict:
         """Форматування транзакції для відображення"""
         # Визначаємо, чи це вхідна транзакція
