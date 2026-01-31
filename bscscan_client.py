@@ -68,7 +68,7 @@ class BSCscanClient:
         # Якщо діапазон блоків занадто великий, автоматично розбиваємо на частини
         # Але тільки якщо не пропущено перевірку (щоб уникнути рекурсії)
         if not skip_range_check:
-            MAX_BLOCKS_PER_REQUEST = 10  # Максимум блоків за один запит (зменшено через обмеження QuickNode)
+            MAX_BLOCKS_PER_REQUEST = 5  # Максимум блоків за один запит (QuickNode має обмеження)
             block_range = end_block - start_block + 1
             if block_range > MAX_BLOCKS_PER_REQUEST:
                 print(f"Діапазон {block_range} блоків занадто великий, розбиваю на частини по {MAX_BLOCKS_PER_REQUEST}...")
@@ -125,18 +125,18 @@ class BSCscanClient:
                 "too many results" in error_str):
                 # Якщо це вже маленький діапазон, спробуємо ще менший
                 block_range = end_block - start_block + 1
-                if block_range > 1 and not skip_range_check:
+                if block_range > 1:
                     print(f"Діапазон {block_range} блоків все ще занадто великий, розбиваю на менші частини...")
-                    # Розбиваємо навіть менші частини
+                    # Розбиваємо навіть менші частини (по 1 блоку, якщо потрібно)
                     smaller_chunk = max(1, block_range // 2)
                     return self._get_token_transactions_in_chunks(address, start_block, end_block, smaller_chunk)
                 elif block_range == 1:
-                    print(f"Пропускаю блок {start_block} - занадто багато даних в одному блоці")
+                    print(f"Пропускаю блок {start_block} - занадто багато даних в одному блоці (можливо, дуже багато USDT транзакцій)")
                     return []
             return []
     
     def _get_token_transactions_in_chunks(self, address: str, start_block: int, end_block: int, 
-                                          chunk_size: int = 10) -> List[Dict]:
+                                          chunk_size: int = 5) -> List[Dict]:
         """Отримання транзакцій частинами, якщо діапазон блоків занадто великий"""
         all_transactions = []
         current_block = start_block
@@ -157,7 +157,7 @@ class BSCscanClient:
                 error_str = str(e).lower()
                 # Якщо навіть маленький chunk занадто великий, ще більше зменшуємо
                 if "413" in error_str or "request entity too large" in error_str:
-                    print(f"Chunk {chunk_blocks} блоків все ще занадто великий, зменшую...")
+                    print(f"Chunk {chunk_blocks} блоків все ще занадто великий, зменшую до {max(1, chunk_blocks // 2)}...")
                     if chunk_blocks > 1:
                         # Розбиваємо цей chunk на ще менші частини
                         smaller_chunk_size = max(1, chunk_blocks // 2)
@@ -166,7 +166,7 @@ class BSCscanClient:
                         )
                         all_transactions.extend(smaller_chunks)
                     else:
-                        print(f"Пропускаю блок {current_block} - занадто багато даних в одному блоці")
+                        print(f"Пропускаю блок {current_block} - занадто багато USDT транзакцій в одному блоці")
                 else:
                     print(f"Помилка при обробці chunk {current_block}-{chunk_end}: {e}")
             
@@ -174,7 +174,7 @@ class BSCscanClient:
             
             # Невелика затримка між запитами, щоб не перевантажити API
             import time
-            time.sleep(0.1)
+            time.sleep(0.2)
         
         return all_transactions
     
