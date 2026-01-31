@@ -1,5 +1,6 @@
 """
-Основний файл бота для моніторингу транзакцій BSCscan
+Основний файл бота для моніторингу транзакцій BSC
+Простий і надійний підхід
 """
 import time
 import json
@@ -10,13 +11,13 @@ from config import WALLET_ADDRESS, CHECK_INTERVAL, MIN_AMOUNT_USDT, TOKEN_SYMBOL
 
 
 class PaymentMonitorBot:
-    """Бот для моніторингу платежів на BSCscan"""
+    """Бот для моніторингу платежів на BSC"""
     
     def __init__(self):
         self.bscscan = BSCscanClient()
         self.telegram = TelegramBot()
         self.processed_txs: Set[str] = set()
-        self.start_block: Optional[int] = None  # Блок на момент запуску бота
+        self.start_block: Optional[int] = None
         self.load_processed_txs()
         self.init_start_block()
         
@@ -26,17 +27,19 @@ class PaymentMonitorBot:
             with open('processed_txs.json', 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self.processed_txs = set(data.get('txs', []))
+                print(f"✅ Завантажено {len(self.processed_txs)} оброблених транзакцій")
         except FileNotFoundError:
             self.processed_txs = set()
+            print("📝 Файл processed_txs.json не знайдено, створю новий")
     
     def init_start_block(self):
-        """Ініціалізація стартового блоку (блок на момент запуску бота)"""
+        """Ініціалізація стартового блоку"""
         self.start_block = self.bscscan.get_latest_block()
         if self.start_block:
-            print(f"Бот запущено. Початок моніторингу з блоку: {self.start_block}")
-            print(f"Будуть оброблятися тільки нові транзакції після цього блоку")
+            print(f"✅ Стартовий блок: {self.start_block}")
+            print(f"📌 Моніторинг почнеться з наступного блоку")
         else:
-            print("Попередження: не вдалося отримати стартовий блок")
+            print("⚠️ Не вдалося отримати стартовий блок")
     
     def save_processed_txs(self):
         """Збереження оброблених транзакцій у файл"""
@@ -44,68 +47,48 @@ class PaymentMonitorBot:
             with open('processed_txs.json', 'w', encoding='utf-8') as f:
                 json.dump({'txs': list(self.processed_txs)}, f, indent=2)
         except Exception as e:
-            print(f"Помилка збереження: {e}")
+            print(f"❌ Помилка збереження: {e}")
     
     def check_new_transactions(self):
-        """Перевірка нових транзакцій (тільки після запуску бота)"""
+        """Перевірка нових транзакцій"""
         print(f"\n{'='*60}")
-        print(f"🔍 Перевірка транзакцій для адреси {WALLET_ADDRESS}")
+        print(f"🔍 Перевірка транзакцій для {WALLET_ADDRESS}")
         print(f"{'='*60}")
         
-        # Отримуємо останній блок
         latest_block = self.bscscan.get_latest_block()
         if not latest_block:
             print("❌ Не вдалося отримати останній блок")
-            print("Перевірте підключення до QuickNode")
             return
         
-        # Якщо стартовий блок не встановлено, встановлюємо його зараз
         if not self.start_block:
             self.start_block = latest_block
             print(f"✅ Встановлено стартовий блок: {self.start_block}")
-            print(f"📌 Моніторинг почнеться з наступного блоку")
             return
         
-        print(f"📊 Останній блок: {latest_block}, Стартовий блок: {self.start_block}")
-        
-        # Перевіряємо тільки блоки після запуску бота
         if latest_block <= self.start_block:
-            print("⏳ Нових блоків немає, очікую...")
+            print("⏳ Нових блоків немає")
             return
         
-        # Отримуємо транзакції тільки з нових блоків
-        start_block = self.start_block + 1
-        blocks_to_check = latest_block - start_block + 1
+        # Перевіряємо останні 50 блоків (або менше, якщо нових блоків менше)
+        start_block = max(self.start_block + 1, latest_block - 49)
+        end_block = latest_block
         
-        # Обмежуємо кількість блоків для перевірки (максимум 100 блоків за раз)
-        # Це допомагає уникнути занадто довгих перевірок
-        MAX_BLOCKS_TO_CHECK = 100
-        if blocks_to_check > MAX_BLOCKS_TO_CHECK:
-            print(f"⚠️ Занадто багато блоків ({blocks_to_check}), перевіряю тільки останні {MAX_BLOCKS_TO_CHECK}")
-            start_block = latest_block - MAX_BLOCKS_TO_CHECK + 1
-            blocks_to_check = MAX_BLOCKS_TO_CHECK
-        
-        print(f"🔎 Перевіряю {blocks_to_check} нових блоків (від {start_block} до {latest_block})")
+        print(f"📊 Перевірка блоків {start_block} - {end_block} ({end_block - start_block + 1} блоків)")
         
         transactions = self.bscscan.get_token_transactions(
             address=WALLET_ADDRESS,
             start_block=start_block,
-            end_block=latest_block
+            end_block=end_block
         )
         
         if not transactions:
-            print(f"✅ Транзакції не знайдено в {blocks_to_check} блоках")
-            # Оновлюємо стартовий блок на поточний
+            print("✅ Транзакції не знайдено")
             self.start_block = latest_block
             return
         
         print(f"🎉 Знайдено {len(transactions)} транзакцій USDT!")
         
-        # Фільтруємо транзакції:
-        # 1. Тільки вхідні (надійшли на нашу адресу)
-        # 2. Тільки USDT
-        # 3. Сума >= 1 USDT
-        # 4. Ще не оброблені
+        # Фільтруємо та обробляємо транзакції
         new_incoming = []
         for tx in transactions:
             tx_hash = tx.get('hash', '')
@@ -114,26 +97,26 @@ class PaymentMonitorBot:
             if tx.get('to', '').lower() != WALLET_ADDRESS.lower():
                 continue
             
-            # Перевіряємо, чи вже обробляли цю транзакцію
+            # Перевіряємо, чи вже обробляли
             if tx_hash and tx_hash in self.processed_txs:
+                print(f"⏭️ Транзакція {tx_hash[:16]}... вже оброблена")
                 continue
             
-            # Форматуємо транзакцію для перевірки
+            # Форматуємо для перевірки
             formatted_tx = self.bscscan.format_transaction(tx)
             
-            # Перевіряємо токен (тільки USDT)
+            # Перевіряємо токен
             if formatted_tx['symbol'].upper() != TOKEN_SYMBOL.upper():
-                print(f"Пропущено транзакцію {tx_hash}: не USDT ({formatted_tx['symbol']})")
                 continue
             
-            # Перевіряємо мінімальну суму (>= 1 USDT)
+            # Перевіряємо мінімальну суму
             if formatted_tx['amount'] < MIN_AMOUNT_USDT:
-                print(f"Пропущено транзакцію {tx_hash}: сума {formatted_tx['amount']:.2f} USDT < {MIN_AMOUNT_USDT} USDT")
+                print(f"⏭️ Транзакція {tx_hash[:16]}... сума {formatted_tx['amount']:.2f} < {MIN_AMOUNT_USDT}")
                 continue
             
             new_incoming.append(tx)
         
-        print(f"💰 Знайдено {len(new_incoming)} нових транзакцій USDT >= {MIN_AMOUNT_USDT} USDT")
+        print(f"💰 Знайдено {len(new_incoming)} нових транзакцій >= {MIN_AMOUNT_USDT} USDT")
         
         # Обробляємо нові транзакції
         for tx in new_incoming:
@@ -141,23 +124,22 @@ class PaymentMonitorBot:
             if not tx_hash:
                 continue
             
-            # Форматуємо дані транзакції
             formatted_tx = self.bscscan.format_transaction(tx)
             
-            print(f"\n💸 НОВА ОПЛАТА ЗНАЙДЕНА!")
+            print(f"\n💸 НОВА ОПЛАТА!")
             print(f"   Хеш: {tx_hash}")
             print(f"   Сума: {formatted_tx['amount']:.2f} {formatted_tx['symbol']}")
-            print(f"   Від: {formatted_tx['from_address'][:10]}...{formatted_tx['from_address'][-8:]}")
+            print(f"   Від: {formatted_tx['from_address']}")
             print(f"   Час: {formatted_tx['timestamp']}")
             
-            # Надсилаємо повідомлення у Telegram
+            # Надсилаємо в Telegram
             if self.telegram.send_payment_notification(formatted_tx):
-                print(f"   ✅ Повідомлення надіслано у Telegram!")
+                print(f"   ✅ Повідомлення надіслано в Telegram!")
                 self.processed_txs.add(tx_hash)
             else:
-                print(f"   ❌ Помилка надсилання повідомлення у Telegram")
+                print(f"   ❌ Помилка надсилання в Telegram")
         
-        # Оновлюємо стартовий блок на поточний
+        # Оновлюємо стартовий блок
         self.start_block = latest_block
         
         # Зберігаємо оброблені транзакції
@@ -167,13 +149,12 @@ class PaymentMonitorBot:
     def run(self):
         """Запуск бота"""
         print("=" * 60)
-        print("БОТ ЗАПУЩЕНО! Моніторинг транзакцій USDT")
+        print("🤖 БОТ ЗАПУЩЕНО!")
         print("=" * 60)
-        print(f"Адреса гаманця: {WALLET_ADDRESS}")
-        print(f"Токен: {TOKEN_SYMBOL}")
-        print(f"Мінімальна сума: {MIN_AMOUNT_USDT} {TOKEN_SYMBOL}")
-        print(f"Інтервал перевірки: {CHECK_INTERVAL} секунд")
-        print(f"Будуть оброблятися тільки нові транзакції після запуску")
+        print(f"📍 Адреса: {WALLET_ADDRESS}")
+        print(f"💰 Токен: {TOKEN_SYMBOL}")
+        print(f"💵 Мінімум: {MIN_AMOUNT_USDT} {TOKEN_SYMBOL}")
+        print(f"⏱️ Інтервал: {CHECK_INTERVAL} секунд")
         print("=" * 60)
         print("Натисніть Ctrl+C для зупинки\n")
         
@@ -182,56 +163,49 @@ class PaymentMonitorBot:
                 self.check_new_transactions()
                 time.sleep(CHECK_INTERVAL)
         except KeyboardInterrupt:
-            print("\nБот зупинено")
+            print("\n\n🛑 Бот зупинено")
             self.save_processed_txs()
 
 
 import sys
 
 def check_connectivity():
+    """Перевірка підключення"""
     errors = []
-    print("Перевірка доступу до BSC Node (QuickNode)...")
+    print("🔍 Перевірка підключення...")
+    
     try:
-        # Створюємо клієнт для перевірки підключення
         from bscscan_client import BSCscanClient
         client = BSCscanClient()
         latest_block = client.get_latest_block()
         if latest_block:
-            print(f"✅ QuickNode OK. Номер останнього блоку: {latest_block}")
+            print(f"✅ QuickNode OK. Блок: {latest_block}")
         else:
-            raise Exception("Не вдалося отримати номер блоку")
+            raise Exception("Не вдалося отримати блок")
     except Exception as e:
-        errors.append(f"❌ QuickNode RPC не працює: {repr(e)}")
-        print("\n💡 Підказка:")
-        print("   1. Переконайтеся, що ви створили endpoint на https://dashboard.quicknode.com/endpoints/new/bsc")
-        print("   2. Виберіть 'Mainnet' (не Testnet)")
-        print("   3. Скопіюйте HTTPS URL та вставте його в config.py як QUICKNODE_BSC_NODE")
-
-    print("Перевірка надсилання повідомлень у Telegram...")
+        errors.append(f"❌ QuickNode: {repr(e)}")
+    
     try:
         test_bot = PaymentMonitorBot().telegram
-        msg = "🤖 Тест старту: Бот має доступ до QuickNode та Telegram!"
+        msg = "🤖 Тест: Бот працює!"
         ok = test_bot.send_message(msg)
         if ok:
-            print("✅ Telegram OK: тестове повідомлення відправлено.")
+            print("✅ Telegram OK")
         else:
-            raise Exception("Telegram повернув помилку, повідомлення не відправлено")
+            raise Exception("Telegram повернув помилку")
     except Exception as e:
-        errors.append(f"❌ Telegram API не працює: {repr(e)}")
-
+        errors.append(f"❌ Telegram: {repr(e)}")
+    
     if errors:
-        print("===" )
-        print("❌ Помилки під час старту:")
+        print("\n❌ Помилки:")
         for err in errors:
-            print(" -", err)
-        print("===" )
-        print("BOT EXITED")
+            print(f"   {err}")
+        print("\nПеревірте налаштування в config.py")
         sys.exit(1)
     else:
-        test_bot.send_message("✅ Бот стартував: доступ до QuickNode та Telegram підтверджено. Починаю моніторинг!")
+        test_bot.send_message("✅ Бот стартував! Моніторинг активний.")
 
 if __name__ == "__main__":
     check_connectivity()
     bot = PaymentMonitorBot()
     bot.run()
-
