@@ -5,7 +5,11 @@
 import time
 from web3 import Web3
 from typing import List, Dict, Optional
-from config import WALLET_ADDRESS, QUICKNODE_BSC_NODE, REQUEST_DELAY, MAX_RETRIES, RETRY_BASE_DELAY, MAX_RETRY_DELAY
+from config import (
+    WALLET_ADDRESS, QUICKNODE_BSC_NODE, GETBLOCK_BSC_NODE,
+    REQUEST_DELAY, MAX_RETRIES, RETRY_BASE_DELAY, MAX_RETRY_DELAY,
+    INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT
+)
 
 # USDT контракт на BSC
 USDT_CONTRACT_BSC = "0x55d398326f99059fF775485246999027B3197955"
@@ -17,7 +21,10 @@ TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 class BSCscanClient:
     """Клієнт для роботи з BSC через QuickNode RPC Endpoint"""
     
-    def __init__(self, rpc_url: str = None):
+    def __init__(self, rpc_url: str = None, use_fallback: bool = True):
+        self.use_fallback = use_fallback and USE_FALLBACK_ENDPOINT
+        self.fallback_url = GETBLOCK_BSC_NODE if self.use_fallback else None
+        
         if rpc_url:
             self.rpc_url = rpc_url
         else:
@@ -33,11 +40,16 @@ class BSCscanClient:
         self.wallet_address = Web3.to_checksum_address(WALLET_ADDRESS)
         self.usdt_contract = Web3.to_checksum_address(USDT_CONTRACT_BSC)
         
-        # Перевірка підключення з retry логікою
+        # Затримка перед першою спробою підключення (якщо було багато 429)
+        if INITIAL_CONNECTION_DELAY > 0:
+            print(f"⏳ Очікування {INITIAL_CONNECTION_DELAY} сек перед підключенням...")
+            time.sleep(INITIAL_CONNECTION_DELAY)
+        
+        # Перевірка підключення з retry логікою та fallback
         self._verify_connection()
     
     def _verify_connection(self):
-        """Перевірка підключення з retry логікою"""
+        """Перевірка підключення з retry логікою та fallback на резервний endpoint"""
         print(f"🔌 Підключення до QuickNode: {self.rpc_url[:50]}...")
         try:
             # Спробуємо отримати поточний блок - це найнадійніший спосіб перевірити підключення
@@ -50,6 +62,25 @@ class BSCscanClient:
             print(f"   Поточний блок: {current_block}")
         except Exception as e:
             error_msg = str(e)
+            
+            # Якщо є резервний endpoint, спробуємо його
+            if self.use_fallback and self.fallback_url:
+                print(f"⚠️ QuickNode недоступний, спробуємо резервний endpoint...")
+                try:
+                    # Переключаємося на резервний endpoint
+                    self.rpc_url = self.fallback_url.rstrip('/')
+                    self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
+                    
+                    # Спробуємо підключитися до резервного endpoint
+                    current_block = self._retry_request(lambda: self.w3.eth.block_number)
+                    
+                    if current_block is not None:
+                        print(f"✅ Підключено до резервного endpoint (GetBlock)")
+                        print(f"   Поточний блок: {current_block}")
+                        return
+                except Exception as fallback_error:
+                    print(f"❌ Резервний endpoint також недоступний: {fallback_error}")
+            
             # Якщо це вже ConnectionError, просто перекидаємо його
             if isinstance(e, ConnectionError):
                 raise
@@ -79,10 +110,14 @@ class BSCscanClient:
                     # Якщо це не тимчасова помилка або остання спроба, викидаємо помилку
                     raise
                 
-                # Експоненційний backoff: 2, 4, 8, 16, 32 секунд (обмежено MAX_RETRY_DELAY)
+                # Експоненційний backoff з базовою затримкою
                 delay = min(RETRY_BASE_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
                 if is_rate_limit:
                     print(f"⚠️ Rate limit (429). Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
+                    # Для 429 помилок додаємо додаткову затримку
+                    if attempt >= 3:  # Після 3 спроб додаємо ще 30 секунд
+                        delay += 30
+                        print(f"   Додаткова затримка через багато 429 помилок: +30 сек")
                 else:
                     print(f"⚠️ Помилка підключення. Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
                 time.sleep(delay)
