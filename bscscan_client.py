@@ -64,6 +64,13 @@ class BSCscanClient:
         print(f"Пошук USDT транзакцій для адреси {address}")
         print(f"Блоки: {start_block} - {end_block}")
         
+        # Якщо діапазон блоків занадто великий, автоматично розбиваємо на частини
+        MAX_BLOCKS_PER_REQUEST = 50  # Максимум блоків за один запит
+        block_range = end_block - start_block + 1
+        if block_range > MAX_BLOCKS_PER_REQUEST:
+            print(f"Діапазон {block_range} блоків занадто великий, розбиваю на частини...")
+            return self._get_token_transactions_in_chunks(address, start_block, end_block, MAX_BLOCKS_PER_REQUEST)
+        
         # Конвертуємо адресу в checksum format
         address_checksum = Web3.to_checksum_address(address)
         
@@ -105,27 +112,55 @@ class BSCscanClient:
             return transactions
             
         except Exception as e:
+            error_str = str(e).lower()
             print(f"Помилка отримання логів: {e}")
-            # Якщо діапазон блоків занадто великий, розбиваємо на менші частини
-            if "query returned more than" in str(e).lower() or "block range too large" in str(e).lower():
+            # Якщо діапазон блоків занадто великий або запит занадто великий, розбиваємо на менші частини
+            if ("query returned more than" in error_str or 
+                "block range too large" in error_str or 
+                "413" in error_str or 
+                "request entity too large" in error_str or
+                "too many results" in error_str):
                 print("Діапазон блоків занадто великий, розбиваю на менші частини...")
                 return self._get_token_transactions_in_chunks(address, start_block, end_block)
             return []
     
     def _get_token_transactions_in_chunks(self, address: str, start_block: int, end_block: int, 
-                                          chunk_size: int = 1000) -> List[Dict]:
+                                          chunk_size: int = 50) -> List[Dict]:
         """Отримання транзакцій частинами, якщо діапазон блоків занадто великий"""
         all_transactions = []
         current_block = start_block
+        total_blocks = end_block - start_block + 1
+        
+        print(f"Розбиваю діапазон {total_blocks} блоків на частини по {chunk_size} блоків...")
         
         while current_block <= end_block:
             chunk_end = min(current_block + chunk_size - 1, end_block)
-            print(f"Обробка блоків {current_block} - {chunk_end}...")
+            chunk_blocks = chunk_end - current_block + 1
+            print(f"Обробка блоків {current_block} - {chunk_end} ({chunk_blocks} блоків)...")
             
-            chunk_txs = self._get_token_transactions_via_rpc(address, current_block, chunk_end)
-            all_transactions.extend(chunk_txs)
+            try:
+                chunk_txs = self._get_token_transactions_via_rpc(address, current_block, chunk_end)
+                all_transactions.extend(chunk_txs)
+            except Exception as e:
+                # Якщо навіть маленький chunk занадто великий, ще більше зменшуємо
+                if "413" in str(e) or "request entity too large" in str(e).lower():
+                    print(f"Chunk все ще занадто великий, зменшую до {chunk_size // 2} блоків...")
+                    if chunk_size > 10:
+                        # Рекурсивно викликаємо з меншим chunk_size
+                        smaller_chunks = self._get_token_transactions_in_chunks(
+                            address, current_block, chunk_end, chunk_size // 2
+                        )
+                        all_transactions.extend(smaller_chunks)
+                    else:
+                        print(f"Пропускаю блоки {current_block}-{chunk_end} (занадто багато даних)")
+                else:
+                    print(f"Помилка при обробці chunk {current_block}-{chunk_end}: {e}")
             
             current_block = chunk_end + 1
+            
+            # Невелика затримка між запитами, щоб не перевантажити API
+            import time
+            time.sleep(0.1)
         
         return all_transactions
     
