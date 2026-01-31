@@ -59,17 +59,20 @@ class BSCscanClient:
         """Отримання токен транзакцій для адреси через QuickNode RPC"""
         return self._get_token_transactions_via_rpc(address, start_block, end_block)
     
-    def _get_token_transactions_via_rpc(self, address: str, start_block: int, end_block: int) -> List[Dict]:
+    def _get_token_transactions_via_rpc(self, address: str, start_block: int, end_block: int, 
+                                       skip_range_check: bool = False) -> List[Dict]:
         """Отримання транзакцій токенів через QuickNode RPC використовуючи eth_getLogs"""
         print(f"Пошук USDT транзакцій для адреси {address}")
         print(f"Блоки: {start_block} - {end_block}")
         
         # Якщо діапазон блоків занадто великий, автоматично розбиваємо на частини
-        MAX_BLOCKS_PER_REQUEST = 50  # Максимум блоків за один запит
-        block_range = end_block - start_block + 1
-        if block_range > MAX_BLOCKS_PER_REQUEST:
-            print(f"Діапазон {block_range} блоків занадто великий, розбиваю на частини...")
-            return self._get_token_transactions_in_chunks(address, start_block, end_block, MAX_BLOCKS_PER_REQUEST)
+        # Але тільки якщо не пропущено перевірку (щоб уникнути рекурсії)
+        if not skip_range_check:
+            MAX_BLOCKS_PER_REQUEST = 10  # Максимум блоків за один запит (зменшено через обмеження QuickNode)
+            block_range = end_block - start_block + 1
+            if block_range > MAX_BLOCKS_PER_REQUEST:
+                print(f"Діапазон {block_range} блоків занадто великий, розбиваю на частини по {MAX_BLOCKS_PER_REQUEST}...")
+                return self._get_token_transactions_in_chunks(address, start_block, end_block, MAX_BLOCKS_PER_REQUEST)
         
         # Конвертуємо адресу в checksum format
         address_checksum = Web3.to_checksum_address(address)
@@ -120,12 +123,20 @@ class BSCscanClient:
                 "413" in error_str or 
                 "request entity too large" in error_str or
                 "too many results" in error_str):
-                print("Діапазон блоків занадто великий, розбиваю на менші частини...")
-                return self._get_token_transactions_in_chunks(address, start_block, end_block)
+                # Якщо це вже маленький діапазон, спробуємо ще менший
+                block_range = end_block - start_block + 1
+                if block_range > 1 and not skip_range_check:
+                    print(f"Діапазон {block_range} блоків все ще занадто великий, розбиваю на менші частини...")
+                    # Розбиваємо навіть менші частини
+                    smaller_chunk = max(1, block_range // 2)
+                    return self._get_token_transactions_in_chunks(address, start_block, end_block, smaller_chunk)
+                elif block_range == 1:
+                    print(f"Пропускаю блок {start_block} - занадто багато даних в одному блоці")
+                    return []
             return []
     
     def _get_token_transactions_in_chunks(self, address: str, start_block: int, end_block: int, 
-                                          chunk_size: int = 50) -> List[Dict]:
+                                          chunk_size: int = 10) -> List[Dict]:
         """Отримання транзакцій частинами, якщо діапазон блоків занадто великий"""
         all_transactions = []
         current_block = start_block
@@ -139,20 +150,23 @@ class BSCscanClient:
             print(f"Обробка блоків {current_block} - {chunk_end} ({chunk_blocks} блоків)...")
             
             try:
-                chunk_txs = self._get_token_transactions_via_rpc(address, current_block, chunk_end)
+                # Викликаємо з skip_range_check=True, щоб уникнути рекурсії
+                chunk_txs = self._get_token_transactions_via_rpc(address, current_block, chunk_end, skip_range_check=True)
                 all_transactions.extend(chunk_txs)
             except Exception as e:
+                error_str = str(e).lower()
                 # Якщо навіть маленький chunk занадто великий, ще більше зменшуємо
-                if "413" in str(e) or "request entity too large" in str(e).lower():
-                    print(f"Chunk все ще занадто великий, зменшую до {chunk_size // 2} блоків...")
-                    if chunk_size > 10:
-                        # Рекурсивно викликаємо з меншим chunk_size
+                if "413" in error_str or "request entity too large" in error_str:
+                    print(f"Chunk {chunk_blocks} блоків все ще занадто великий, зменшую...")
+                    if chunk_blocks > 1:
+                        # Розбиваємо цей chunk на ще менші частини
+                        smaller_chunk_size = max(1, chunk_blocks // 2)
                         smaller_chunks = self._get_token_transactions_in_chunks(
-                            address, current_block, chunk_end, chunk_size // 2
+                            address, current_block, chunk_end, smaller_chunk_size
                         )
                         all_transactions.extend(smaller_chunks)
                     else:
-                        print(f"Пропускаю блоки {current_block}-{chunk_end} (занадто багато даних)")
+                        print(f"Пропускаю блок {current_block} - занадто багато даних в одному блоці")
                 else:
                     print(f"Помилка при обробці chunk {current_block}-{chunk_end}: {e}")
             
