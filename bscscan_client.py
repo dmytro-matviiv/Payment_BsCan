@@ -26,33 +26,65 @@ class BSCscanClient:
         if not self.rpc_url:
             raise ValueError("QUICKNODE_BSC_NODE не встановлено в config.py!")
         
+        # Нормалізуємо URL (прибираємо зайвий слеш в кінці, якщо є)
+        self.rpc_url = self.rpc_url.rstrip('/')
+        
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
-        
-        if not self.w3.is_connected():
-            raise ConnectionError(f"Не вдалося підключитися до QuickNode: {self.rpc_url}")
-        
-        print(f"✅ Підключено до QuickNode BSC")
-        print(f"   Поточний блок: {self.w3.eth.block_number}")
-        
         self.wallet_address = Web3.to_checksum_address(WALLET_ADDRESS)
         self.usdt_contract = Web3.to_checksum_address(USDT_CONTRACT_BSC)
+        
+        # Перевірка підключення з retry логікою
+        self._verify_connection()
+    
+    def _verify_connection(self):
+        """Перевірка підключення з retry логікою"""
+        print(f"🔌 Підключення до QuickNode: {self.rpc_url[:50]}...")
+        try:
+            # Спробуємо отримати поточний блок - це найнадійніший спосіб перевірити підключення
+            current_block = self._retry_request(lambda: self.w3.eth.block_number)
+            
+            if current_block is None:
+                raise ConnectionError(f"Не вдалося отримати блок від QuickNode: {self.rpc_url}")
+            
+            print(f"✅ Підключено до QuickNode BSC")
+            print(f"   Поточний блок: {current_block}")
+        except Exception as e:
+            error_msg = str(e)
+            # Якщо це вже ConnectionError, просто перекидаємо його
+            if isinstance(e, ConnectionError):
+                raise
+            # Інакше обгортаємо в ConnectionError
+            raise ConnectionError(f"Не вдалося підключитися до QuickNode: {self.rpc_url}. Помилка: {error_msg}") from e
     
     def _retry_request(self, func, *args, **kwargs):
-        """Виконання запиту з retry логікою для обробки 429 помилок"""
+        """Виконання запиту з retry логікою для обробки 429 помилок та тимчасових помилок підключення"""
         for attempt in range(MAX_RETRIES):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
                 error_str = str(e).lower()
                 is_rate_limit = "429" in error_str or "too many requests" in error_str
+                # Також обробляємо інші тимчасові помилки підключення
+                is_connection_error = (
+                    "connection" in error_str or 
+                    "timeout" in error_str or
+                    "network" in error_str or
+                    "temporarily unavailable" in error_str
+                )
                 
-                if not is_rate_limit or attempt == MAX_RETRIES - 1:
-                    # Якщо це не rate limit помилка або остання спроба, викидаємо помилку
+                # Retry для rate limit та тимчасових помилок підключення
+                should_retry = (is_rate_limit or is_connection_error) and attempt < MAX_RETRIES - 1
+                
+                if not should_retry:
+                    # Якщо це не тимчасова помилка або остання спроба, викидаємо помилку
                     raise
                 
                 # Експоненційний backoff: 2, 4, 8, 16, 32 секунд (обмежено MAX_RETRY_DELAY)
                 delay = min(RETRY_BASE_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
-                print(f"⚠️ Rate limit (429). Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
+                if is_rate_limit:
+                    print(f"⚠️ Rate limit (429). Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
+                else:
+                    print(f"⚠️ Помилка підключення. Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
                 time.sleep(delay)
         
         return None

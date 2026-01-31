@@ -174,6 +174,7 @@ def check_connectivity():
     errors = []
     print("🔍 Перевірка підключення...")
     
+    # Перевірка QuickNode
     try:
         from bscscan_client import BSCscanClient
         client = BSCscanClient()
@@ -183,18 +184,31 @@ def check_connectivity():
         else:
             raise Exception("Не вдалося отримати блок")
     except Exception as e:
-        errors.append(f"❌ QuickNode: {repr(e)}")
+        error_msg = str(e)
+        # Витягуємо основну помилку без повного traceback
+        if "ConnectionError" in error_msg or "Не вдалося підключитися" in error_msg:
+            errors.append(f"❌ QuickNode: Не вдалося підключитися до QuickNode")
+        else:
+            errors.append(f"❌ QuickNode: {error_msg}")
     
+    # Перевірка Telegram (окремо, без створення PaymentMonitorBot)
     try:
-        test_bot = PaymentMonitorBot().telegram
+        from telegram_bot import TelegramBot
+        test_telegram = TelegramBot()
         msg = "🤖 Тест: Бот працює!"
-        ok = test_bot.send_message(msg)
+        ok = test_telegram.send_message(msg)
         if ok:
             print("✅ Telegram OK")
         else:
             raise Exception("Telegram повернув помилку")
     except Exception as e:
-        errors.append(f"❌ Telegram: {repr(e)}")
+        error_msg = str(e)
+        # Витягуємо основну помилку
+        if "ConnectionError" in error_msg and "QuickNode" in error_msg:
+            # Це помилка від QuickNode, не від Telegram
+            pass  # Вже додано вище
+        else:
+            errors.append(f"❌ Telegram: {error_msg}")
     
     if errors:
         print("\n❌ Помилки:")
@@ -203,7 +217,11 @@ def check_connectivity():
         print("\nПеревірте налаштування в config.py")
         sys.exit(1)
     else:
-        test_bot.send_message("✅ Бот стартував! Моніторинг активний.")
+        # Відправляємо повідомлення про успішний старт
+        try:
+            test_telegram.send_message("✅ Бот стартував! Моніторинг активний.")
+        except:
+            pass  # Не критично, якщо не вдалося відправити
 
 if __name__ == "__main__":
     check_connectivity()
