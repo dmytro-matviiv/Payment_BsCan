@@ -62,31 +62,20 @@ class BSCscanClient:
     def _get_token_transactions_via_rpc(self, address: str, start_block: int, end_block: int, 
                                        skip_range_check: bool = False) -> List[Dict]:
         """Отримання транзакцій токенів через QuickNode RPC використовуючи eth_getLogs"""
-        print(f"Пошук USDT транзакцій для адреси {address}")
-        print(f"Блоки: {start_block} - {end_block}")
-        
-        # Якщо діапазон блоків занадто великий, автоматично розбиваємо на частини
-        # Але тільки якщо не пропущено перевірку (щоб уникнути рекурсії)
+        # Завжди перевіряємо блоки по одному для надійності
         if not skip_range_check:
-            MAX_BLOCKS_PER_REQUEST = 5  # Максимум блоків за один запит (QuickNode має обмеження)
             block_range = end_block - start_block + 1
-            if block_range > MAX_BLOCKS_PER_REQUEST:
-                print(f"Діапазон {block_range} блоків занадто великий, розбиваю на частини по {MAX_BLOCKS_PER_REQUEST}...")
-                return self._get_token_transactions_in_chunks(address, start_block, end_block, MAX_BLOCKS_PER_REQUEST)
+            if block_range > 1:
+                # Розбиваємо на окремі блоки
+                return self._get_token_transactions_in_chunks(address, start_block, end_block, 1)
         
         # Конвертуємо адресу в checksum format
         address_checksum = Web3.to_checksum_address(address)
         
-        # Формуємо фільтр для Transfer events
-        # Transfer(address indexed from, address indexed to, uint256 value)
-        # Topic 0: Transfer event signature
-        # Topic 1: from address (indexed)
-        # Topic 2: to address (indexed)
-        
-        # Фільтр для вхідних транзакцій (to = наша адреса)
+        # Формуємо фільтр для Transfer events (тільки один блок)
         filter_params = {
             'fromBlock': start_block,
-            'toBlock': end_block if end_block < 99999999 else 'latest',
+            'toBlock': start_block,  # Тільки один блок
             'address': self.usdt_contract,  # USDT контракт
             'topics': [
                 TRANSFER_EVENT_TOPIC,  # Transfer event
@@ -98,7 +87,6 @@ class BSCscanClient:
         try:
             # Отримуємо логи через eth_getLogs
             logs = self.w3.eth.get_logs(filter_params)
-            print(f"Знайдено {len(logs)} Transfer events")
             
             # Конвертуємо логи в транзакції
             transactions = []
@@ -108,74 +96,46 @@ class BSCscanClient:
                     if tx:
                         transactions.append(tx)
                 except Exception as e:
-                    print(f"Помилка обробки логу: {e}")
+                    print(f"⚠️ Помилка обробки логу в блоці {start_block}: {e}")
                     continue
             
-            print(f"Всього знайдено {len(transactions)} вхідних транзакцій USDT")
+            if transactions:
+                print(f"✅ Блок {start_block}: знайдено {len(transactions)} транзакцій USDT")
             return transactions
             
         except Exception as e:
             error_str = str(e).lower()
-            print(f"Помилка отримання логів: {e}")
-            # Якщо діапазон блоків занадто великий або запит занадто великий, розбиваємо на менші частини
-            if ("query returned more than" in error_str or 
-                "block range too large" in error_str or 
-                "413" in error_str or 
-                "request entity too large" in error_str or
-                "too many results" in error_str):
-                # Якщо це вже маленький діапазон, спробуємо ще менший
-                block_range = end_block - start_block + 1
-                if block_range > 1:
-                    print(f"Діапазон {block_range} блоків все ще занадто великий, розбиваю на менші частини...")
-                    # Розбиваємо навіть менші частини (по 1 блоку, якщо потрібно)
-                    smaller_chunk = max(1, block_range // 2)
-                    return self._get_token_transactions_in_chunks(address, start_block, end_block, smaller_chunk)
-                elif block_range == 1:
-                    print(f"Пропускаю блок {start_block} - занадто багато даних в одному блоці (можливо, дуже багато USDT транзакцій)")
-                    return []
+            # Якщо навіть один блок занадто великий, пропускаємо його
+            if ("413" in error_str or "request entity too large" in error_str):
+                print(f"⚠️ Блок {start_block} пропущено - занадто багато USDT транзакцій (це нормально для BSC)")
+            else:
+                print(f"⚠️ Помилка при перевірці блоку {start_block}: {e}")
             return []
     
     def _get_token_transactions_in_chunks(self, address: str, start_block: int, end_block: int, 
-                                          chunk_size: int = 5) -> List[Dict]:
-        """Отримання транзакцій частинами, якщо діапазон блоків занадто великий"""
+                                          chunk_size: int = 1) -> List[Dict]:
+        """Отримання транзакцій частинами, перевіряючи блоки по одному"""
         all_transactions = []
         current_block = start_block
         total_blocks = end_block - start_block + 1
         
-        print(f"Розбиваю діапазон {total_blocks} блоків на частини по {chunk_size} блоків...")
+        print(f"📊 Перевірка {total_blocks} блоків (по одному для надійності)...")
         
         while current_block <= end_block:
-            chunk_end = min(current_block + chunk_size - 1, end_block)
-            chunk_blocks = chunk_end - current_block + 1
-            print(f"Обробка блоків {current_block} - {chunk_end} ({chunk_blocks} блоків)...")
-            
             try:
-                # Викликаємо з skip_range_check=True, щоб уникнути рекурсії
-                chunk_txs = self._get_token_transactions_via_rpc(address, current_block, chunk_end, skip_range_check=True)
+                # Перевіряємо один блок
+                chunk_txs = self._get_token_transactions_via_rpc(address, current_block, current_block, skip_range_check=True)
                 all_transactions.extend(chunk_txs)
             except Exception as e:
-                error_str = str(e).lower()
-                # Якщо навіть маленький chunk занадто великий, ще більше зменшуємо
-                if "413" in error_str or "request entity too large" in error_str:
-                    print(f"Chunk {chunk_blocks} блоків все ще занадто великий, зменшую до {max(1, chunk_blocks // 2)}...")
-                    if chunk_blocks > 1:
-                        # Розбиваємо цей chunk на ще менші частини
-                        smaller_chunk_size = max(1, chunk_blocks // 2)
-                        smaller_chunks = self._get_token_transactions_in_chunks(
-                            address, current_block, chunk_end, smaller_chunk_size
-                        )
-                        all_transactions.extend(smaller_chunks)
-                    else:
-                        print(f"Пропускаю блок {current_block} - занадто багато USDT транзакцій в одному блоці")
-                else:
-                    print(f"Помилка при обробці chunk {current_block}-{chunk_end}: {e}")
+                print(f"⚠️ Помилка при перевірці блоку {current_block}: {e}")
             
-            current_block = chunk_end + 1
+            current_block += 1
             
-            # Невелика затримка між запитами, щоб не перевантажити API
+            # Невелика затримка між запитами
             import time
-            time.sleep(0.2)
+            time.sleep(0.1)
         
+        print(f"✅ Перевірка завершена. Знайдено {len(all_transactions)} транзакцій USDT")
         return all_transactions
     
     def _address_to_topic(self, address: str) -> str:

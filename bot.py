@@ -48,30 +48,35 @@ class PaymentMonitorBot:
     
     def check_new_transactions(self):
         """Перевірка нових транзакцій (тільки після запуску бота)"""
-        print(f"Перевірка транзакцій для адреси {WALLET_ADDRESS}...")
+        print(f"\n{'='*60}")
+        print(f"🔍 Перевірка транзакцій для адреси {WALLET_ADDRESS}")
+        print(f"{'='*60}")
         
         # Отримуємо останній блок
         latest_block = self.bscscan.get_latest_block()
         if not latest_block:
-            print("Не вдалося отримати останній блок")
-            print("Перевірте API ключ та підключення до інтернету")
+            print("❌ Не вдалося отримати останній блок")
+            print("Перевірте підключення до QuickNode")
             return
         
         # Якщо стартовий блок не встановлено, встановлюємо його зараз
         if not self.start_block:
             self.start_block = latest_block
-            print(f"Встановлено стартовий блок: {self.start_block}")
+            print(f"✅ Встановлено стартовий блок: {self.start_block}")
+            print(f"📌 Моніторинг почнеться з наступного блоку")
+            return
         
-        print(f"Останній блок: {latest_block}, Стартовий блок: {self.start_block}")
+        print(f"📊 Останній блок: {latest_block}, Стартовий блок: {self.start_block}")
         
         # Перевіряємо тільки блоки після запуску бота
         if latest_block <= self.start_block:
-            print("Нових блоків немає")
+            print("⏳ Нових блоків немає, очікую...")
             return
         
         # Отримуємо транзакції тільки з нових блоків
         start_block = self.start_block + 1
-        print(f"Пошук транзакцій від блоку {start_block} до {latest_block}")
+        blocks_to_check = latest_block - start_block + 1
+        print(f"🔎 Перевіряю {blocks_to_check} нових блоків (від {start_block} до {latest_block})")
         
         transactions = self.bscscan.get_token_transactions(
             address=WALLET_ADDRESS,
@@ -80,12 +85,12 @@ class PaymentMonitorBot:
         )
         
         if not transactions:
-            print("Транзакції не знайдено")
+            print(f"✅ Транзакції не знайдено в {blocks_to_check} блоках")
             # Оновлюємо стартовий блок на поточний
             self.start_block = latest_block
             return
         
-        print(f"Знайдено {len(transactions)} транзакцій")
+        print(f"🎉 Знайдено {len(transactions)} транзакцій USDT!")
         
         # Фільтруємо транзакції:
         # 1. Тільки вхідні (надійшли на нашу адресу)
@@ -119,25 +124,29 @@ class PaymentMonitorBot:
             
             new_incoming.append(tx)
         
-        print(f"Знайдено {len(new_incoming)} нових транзакцій USDT >= {MIN_AMOUNT_USDT} USDT")
+        print(f"💰 Знайдено {len(new_incoming)} нових транзакцій USDT >= {MIN_AMOUNT_USDT} USDT")
         
         # Обробляємо нові транзакції
         for tx in new_incoming:
             tx_hash = tx.get('hash', '')
             if not tx_hash:
                 continue
-                
-            print(f"Нова транзакція USDT знайдена: {tx_hash}")
             
             # Форматуємо дані транзакції
             formatted_tx = self.bscscan.format_transaction(tx)
             
+            print(f"\n💸 НОВА ОПЛАТА ЗНАЙДЕНА!")
+            print(f"   Хеш: {tx_hash}")
+            print(f"   Сума: {formatted_tx['amount']:.2f} {formatted_tx['symbol']}")
+            print(f"   Від: {formatted_tx['from_address'][:10]}...{formatted_tx['from_address'][-8:]}")
+            print(f"   Час: {formatted_tx['timestamp']}")
+            
             # Надсилаємо повідомлення у Telegram
             if self.telegram.send_payment_notification(formatted_tx):
-                print(f"Повідомлення надіслано успішно для транзакції {tx_hash}")
+                print(f"   ✅ Повідомлення надіслано у Telegram!")
                 self.processed_txs.add(tx_hash)
             else:
-                print(f"Помилка надсилання повідомлення для транзакції {tx_hash}")
+                print(f"   ❌ Помилка надсилання повідомлення у Telegram")
         
         # Оновлюємо стартовий блок на поточний
         self.start_block = latest_block
