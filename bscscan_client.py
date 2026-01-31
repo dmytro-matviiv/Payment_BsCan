@@ -2,9 +2,10 @@
 Модуль для роботи з BSC через QuickNode RPC Endpoint
 Простий і надійний підхід для моніторингу USDT транзакцій
 """
+import time
 from web3 import Web3
 from typing import List, Dict, Optional
-from config import WALLET_ADDRESS, QUICKNODE_BSC_NODE
+from config import WALLET_ADDRESS, QUICKNODE_BSC_NODE, REQUEST_DELAY, MAX_RETRIES, RETRY_BASE_DELAY, MAX_RETRY_DELAY
 
 # USDT контракт на BSC
 USDT_CONTRACT_BSC = "0x55d398326f99059fF775485246999027B3197955"
@@ -36,10 +37,30 @@ class BSCscanClient:
         self.wallet_address = Web3.to_checksum_address(WALLET_ADDRESS)
         self.usdt_contract = Web3.to_checksum_address(USDT_CONTRACT_BSC)
     
+    def _retry_request(self, func, *args, **kwargs):
+        """Виконання запиту з retry логікою для обробки 429 помилок"""
+        for attempt in range(MAX_RETRIES):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str
+                
+                if not is_rate_limit or attempt == MAX_RETRIES - 1:
+                    # Якщо це не rate limit помилка або остання спроба, викидаємо помилку
+                    raise
+                
+                # Експоненційний backoff: 2, 4, 8, 16, 32 секунд (обмежено MAX_RETRY_DELAY)
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
+                print(f"⚠️ Rate limit (429). Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
+                time.sleep(delay)
+        
+        return None
+    
     def get_latest_block(self) -> Optional[int]:
-        """Отримання останнього блоку"""
+        """Отримання останнього блоку з retry логікою"""
         try:
-            return self.w3.eth.block_number
+            return self._retry_request(lambda: self.w3.eth.block_number)
         except Exception as e:
             print(f"❌ Помилка отримання блоку: {e}")
             return None
@@ -72,7 +93,7 @@ class BSCscanClient:
         
         for block_num in range(start_block, end_block + 1):
             try:
-                # Отримуємо логи Transfer events для одного блоку
+                # Отримуємо логи Transfer events для одного блоку з retry логікою
                 filter_params = {
                     'fromBlock': block_num,
                     'toBlock': block_num,
@@ -84,19 +105,28 @@ class BSCscanClient:
                     ]
                 }
                 
-                logs = self.w3.eth.get_logs(filter_params)
+                logs = self._retry_request(
+                    lambda: self.w3.eth.get_logs(filter_params)
+                )
                 
-                # Обробляємо знайдені логи
-                for log in logs:
-                    tx = self._log_to_transaction(log, block_num)
-                    if tx:
-                        all_transactions.append(tx)
+                # Обробляємо знайдені логи (якщо retry успішний)
+                if logs is not None:
+                    for log in logs:
+                        tx = self._log_to_transaction(log, block_num)
+                        if tx:
+                            all_transactions.append(tx)
+                
+                # Затримка між запитами для уникнення rate limiting
+                if block_num < end_block and REQUEST_DELAY > 0:
+                    time.sleep(REQUEST_DELAY)
                 
             except Exception as e:
                 # Якщо помилка 413 або подібна, просто пропускаємо блок
                 error_str = str(e).lower()
                 if "413" not in error_str and "too large" not in error_str:
-                    print(f"⚠️ Помилка блоку {block_num}: {e}")
+                    # Для 429 помилок вже виведено повідомлення в _retry_request
+                    if "429" not in error_str and "too many requests" not in error_str:
+                        print(f"⚠️ Помилка блоку {block_num}: {e}")
                 continue
         
         print(f"✅ Знайдено {len(all_transactions)} транзакцій USDT")
@@ -138,10 +168,10 @@ class BSCscanClient:
             elif not isinstance(tx_hash, str):
                 tx_hash = str(tx_hash)
             
-            # Отримуємо timestamp з блоку
+            # Отримуємо timestamp з блоку з retry логікою
             try:
-                block = self.w3.eth.get_block(block_number)
-                timestamp = block.get('timestamp', 0)
+                block = self._retry_request(lambda: self.w3.eth.get_block(block_number))
+                timestamp = block.get('timestamp', 0) if block else 0
             except:
                 timestamp = 0
             
@@ -192,8 +222,12 @@ class BSCscanClient:
     def check_transaction_by_hash(self, tx_hash: str) -> Optional[Dict]:
         """Перевірка конкретної транзакції за хешем"""
         try:
-            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
-            block = self.w3.eth.get_block(receipt['blockNumber'])
+            receipt = self._retry_request(lambda: self.w3.eth.get_transaction_receipt(tx_hash))
+            if not receipt:
+                return None
+            block = self._retry_request(lambda: self.w3.eth.get_block(receipt['blockNumber']))
+            if not block:
+                return None
             timestamp = block['timestamp']
             
             address_checksum = Web3.to_checksum_address(WALLET_ADDRESS)
