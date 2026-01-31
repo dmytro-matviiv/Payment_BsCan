@@ -1,392 +1,196 @@
 """
-Модуль для роботи з BSC через TokenView Address Tracking API
-Використовує API: https://services.tokenview.io/
-Документація: https://services.tokenview.io/docs/track.html
+Модуль для роботи з BSC через QuickNode RPC Endpoint
+Використовує Web3.py для моніторингу транзакцій через eth_getLogs
 """
-import requests
-import time
-import json
+from web3 import Web3
 from typing import List, Dict, Optional
-from config import (
-    WALLET_ADDRESS,
-    USE_NODEREAL, NODEREAL_API_KEY
-)
+from config import WALLET_ADDRESS, QUICKNODE_BSC_NODE
 
 # USDT контракт на BSC
 USDT_CONTRACT_BSC = "0x55d398326f99059fF775485246999027B3197955"
 
-# TokenView API endpoint
-TOKENVIEW_API_BASE = "https://services.tokenview.io/vipapi"
+# ERC20 Transfer event signature (keccak256 hash of "Transfer(address,address,uint256)")
+TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 
 class BSCscanClient:
-    """Клієнт для роботи з BSC через TokenView API"""
+    """Клієнт для роботи з BSC через QuickNode RPC Endpoint"""
     
-    def __init__(self, api_key: str = None):
-        self.use_nodereal = USE_NODEREAL
-        if api_key:
-            self.api_key = api_key
+    def __init__(self, rpc_url: str = None):
+        # Використовуємо QuickNode RPC endpoint з конфігурації
+        if rpc_url:
+            self.rpc_url = rpc_url
         else:
-            # Використовуємо TokenView API ключ з конфігурації
-            self.api_key = NODEREAL_API_KEY if USE_NODEREAL and NODEREAL_API_KEY else ""
+            self.rpc_url = QUICKNODE_BSC_NODE
         
-        self.api_base = TOKENVIEW_API_BASE
+        if not self.rpc_url:
+            raise ValueError(
+                "QUICKNODE_BSC_NODE не встановлено в config.py!\n"
+                "Отримайте endpoint на https://dashboard.quicknode.com/endpoints/new/bsc\n"
+                "Виберіть Mainnet та скопіюйте HTTPS URL в config.py"
+            )
+        
+        # Ініціалізуємо Web3
+        self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
+        
+        # Перевіряємо підключення
+        if not self.w3.is_connected():
+            raise ConnectionError(f"Не вдалося підключитися до QuickNode RPC: {self.rpc_url}")
+        
+        print(f"✅ Підключено до QuickNode BSC RPC: {self.rpc_url[:50]}...")
+        print(f"✅ Поточний блок: {self.w3.eth.block_number}")
+        
+        # Конвертуємо адреси в checksum format
+        self.wallet_address = Web3.to_checksum_address(WALLET_ADDRESS)
+        self.usdt_contract = Web3.to_checksum_address(USDT_CONTRACT_BSC)
+        
         self.last_block = None
-        
-        print(f"TokenView Address Tracking API: {self.api_base}")
-        if self.api_key:
-            print(f"✅ TokenView Address Tracking API ключ встановлено: {self.api_key[:10]}...")
-        else:
-            print("⚠️  TokenView API ключ не встановлено")
-            print("   Додайте ключ у config.py як NODEREAL_API_KEY")
     
-    def _make_api_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
-        """Виконання запиту до TokenView API"""
-        if params is None:
-            params = {}
-        
-        # Додаємо API ключ до параметрів
-        if self.api_key:
-            params['apikey'] = self.api_key
-        
-        url = f"{self.api_base}/{endpoint}"
-        
+    def get_latest_block(self) -> Optional[int]:
+        """Отримання останнього блоку через QuickNode RPC"""
         try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Перевіряємо структуру відповіді TokenView
-            if data.get('code') == 1:  # TokenView використовує code=1 для успіху
-                data_content = data.get('data', {})
-                # Дані можуть бути в data.txs або просто data як список
-                if isinstance(data_content, dict):
-                    return data_content.get('txs', data_content.get('list', []))
-                elif isinstance(data_content, list):
-                    return data_content
-                else:
-                    return []
-            elif data.get('code') == 0:
-                # Помилка від API
-                error_msg = data.get('msg', data.get('message', 'Unknown error'))
-                print(f"Помилка TokenView API: {error_msg}")
-                return None
-            else:
-                # Можливо, дані без обгортки або інша структура
-                if isinstance(data, dict) and 'data' in data:
-                    return data['data'] if isinstance(data['data'], list) else []
-                return data if isinstance(data, list) else []
-                
-        except requests.exceptions.RequestException as e:
-            print(f"Помилка запиту до TokenView API: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_data = e.response.json()
-                    print(f"Відповідь сервера: {error_data}")
-                except:
-                    print(f"Відповідь сервера: {e.response.text}")
+            return self.w3.eth.block_number
+        except Exception as e:
+            print(f"Помилка отримання останнього блоку: {e}")
             return None
     
     def get_token_transactions(self, address: str = WALLET_ADDRESS, start_block: int = 0, 
                                end_block: int = 99999999) -> List[Dict]:
-        """Отримання токен транзакцій для адреси через TokenView API"""
-        return self._get_token_transactions_via_tokenview(address, start_block, end_block)
+        """Отримання токен транзакцій для адреси через QuickNode RPC"""
+        return self._get_token_transactions_via_rpc(address, start_block, end_block)
     
-    def _get_token_transactions_via_tokenview(self, address: str, start_block: int, end_block: int) -> List[Dict]:
-        """Отримання транзакцій токенів через TokenView Address Tracking API"""
+    def _get_token_transactions_via_rpc(self, address: str, start_block: int, end_block: int) -> List[Dict]:
+        """Отримання транзакцій токенів через QuickNode RPC використовуючи eth_getLogs"""
         print(f"Пошук USDT транзакцій для адреси {address}")
         print(f"Блоки: {start_block} - {end_block}")
         
-        # TokenView Address Tracking API - Webhook History endpoint
-        # Документація: https://services.tokenview.io/docs/track.html
-        # Endpoint: /vipapi/monitor/webhookhistory/{chain}?page={page}&apikey={apikey}
-        # Повертає історичні повідомлення для всіх адрес однієї блокчейн мережі (100 записів на сторінку)
+        # Конвертуємо адресу в checksum format
+        address_checksum = Web3.to_checksum_address(address)
         
-        all_transactions = []
-        page = 1
+        # Формуємо фільтр для Transfer events
+        # Transfer(address indexed from, address indexed to, uint256 value)
+        # Topic 0: Transfer event signature
+        # Topic 1: from address (indexed)
+        # Topic 2: to address (indexed)
         
-        while True:
-            endpoint = f"monitor/webhookhistory/bsc"  # BSC = bsc (lowercase)
+        # Фільтр для вхідних транзакцій (to = наша адреса)
+        filter_params = {
+            'fromBlock': start_block,
+            'toBlock': end_block if end_block < 99999999 else 'latest',
+            'address': self.usdt_contract,  # USDT контракт
+            'topics': [
+                TRANSFER_EVENT_TOPIC,  # Transfer event
+                None,  # from (будь-яка адреса)
+                [self._address_to_topic(address_checksum)]  # to = наша адреса
+            ]
+        }
+        
+        try:
+            # Отримуємо логи через eth_getLogs
+            logs = self.w3.eth.get_logs(filter_params)
+            print(f"Знайдено {len(logs)} Transfer events")
             
-            params = {
-                'page': page
-            }
-            
-            print(f"Запит сторінки {page} до: {self.api_base}/{endpoint}")
-            response_data = self._make_api_request(endpoint, params)
-            
-            if response_data is None:
-                print(f"Не вдалося отримати дані на сторінці {page}")
-                break
-            
-            # Обробляємо відповідь від webhookhistory endpoint
-            # Структура відповіді:
-            # {
-            #   "code": 1,
-            #   "msg": "success",
-            #   "data": {
-            #     "page": 1,
-            #     "size": 100,
-            #     "total": 200,
-            #     "list": [...]
-            #   }
-            # }
-            
-            transactions_list = []
-            
-            if isinstance(response_data, dict):
-                if 'list' in response_data:
-                    transactions_list = response_data['list']
-                elif 'data' in response_data:
-                    if isinstance(response_data['data'], dict) and 'list' in response_data['data']:
-                        transactions_list = response_data['data']['list']
-                    elif isinstance(response_data['data'], list):
-                        transactions_list = response_data['data']
-            elif isinstance(response_data, list):
-                transactions_list = response_data
-            
-            if not transactions_list:
-                print(f"Транзакції не знайдено на сторінці {page}")
-                break
-            
-            print(f"Знайдено {len(transactions_list)} записів на сторінці {page}")
-            
-            # Фільтруємо транзакції для нашої адреси та USDT
-            filtered_txs = []
-            for tx in transactions_list:
+            # Конвертуємо логи в транзакції
+            transactions = []
+            for log in logs:
                 try:
-                    # У webhook history дані можуть бути в полі 'request' (JSON рядок)
-                    request_data = tx.get('request')
-                    if request_data and isinstance(request_data, str):
-                        try:
-                            request_json = json.loads(request_data)
-                            # Об'єднуємо дані з request у tx (request має пріоритет)
-                            tx = {**tx, **request_json}
-                        except Exception as e:
-                            # Якщо не вдалося розпарсити, використовуємо tx як є
-                            pass
-                    
-                    # Перевіряємо адресу (тільки для нашої адреси)
-                    tx_address = (tx.get('address') or '').lower()
-                    if tx_address != address.lower():
-                        continue
-                    
-                    # Перевіряємо блок
-                    block_num = tx.get('height') or tx.get('blockHeight') or tx.get('blockNo')
-                    if block_num:
-                        try:
-                            block_num = int(block_num) if isinstance(block_num, (int, str)) else 0
-                            if block_num < start_block or block_num > end_block:
-                                continue
-                        except:
-                            pass
-                    
-                    # Перевіряємо токен (тільки USDT)
-                    token_symbol = (tx.get('tokenSymbol') or '').upper()
-                    token_address = (tx.get('tokenAddress') or '').lower()
-                    
-                    is_usdt = (
-                        token_symbol == 'USDT' or 
-                        token_address == USDT_CONTRACT_BSC.lower()
-                    )
-                    
-                    if not is_usdt:
-                        continue
-                    
-                    # Перевіряємо, чи це вхідна транзакція (tokenValue не має знаку "-")
-                    # В webhook history tokenValue може бути рядком, де "-" означає вихідну
-                    value_str = str(tx.get('tokenValue') or tx.get('value') or '0')
-                    is_incoming = not value_str.startswith('-')
-                    
-                    if is_incoming:
-                        filtered_txs.append(self._format_webhook_transaction(tx))
+                    tx = self._log_to_transaction(log)
+                    if tx:
+                        transactions.append(tx)
                 except Exception as e:
-                    print(f"Помилка обробки транзакції: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    print(f"Помилка обробки логу: {e}")
                     continue
             
-            all_transactions.extend(filtered_txs)
+            print(f"Всього знайдено {len(transactions)} вхідних транзакцій USDT")
+            return transactions
             
-            # Якщо отримано менше 100 записів, це остання сторінка
-            if len(transactions_list) < 100:
-                break
-            
-            page += 1
-            
-            # Запобігаємо занадто багатьом запитам
-            if page > 100:  # Максимум 100 сторінок
-                print("Досягнуто максимальну кількість сторінок (100)")
-                break
-            
-            # Затримка між запитами
-            time.sleep(0.2)
+        except Exception as e:
+            print(f"Помилка отримання логів: {e}")
+            # Якщо діапазон блоків занадто великий, розбиваємо на менші частини
+            if "query returned more than" in str(e).lower() or "block range too large" in str(e).lower():
+                print("Діапазон блоків занадто великий, розбиваю на менші частини...")
+                return self._get_token_transactions_in_chunks(address, start_block, end_block)
+            return []
+    
+    def _get_token_transactions_in_chunks(self, address: str, start_block: int, end_block: int, 
+                                          chunk_size: int = 1000) -> List[Dict]:
+        """Отримання транзакцій частинами, якщо діапазон блоків занадто великий"""
+        all_transactions = []
+        current_block = start_block
         
-        print(f"Всього знайдено {len(all_transactions)} вхідних транзакцій USDT")
+        while current_block <= end_block:
+            chunk_end = min(current_block + chunk_size - 1, end_block)
+            print(f"Обробка блоків {current_block} - {chunk_end}...")
+            
+            chunk_txs = self._get_token_transactions_via_rpc(address, current_block, chunk_end)
+            all_transactions.extend(chunk_txs)
+            
+            current_block = chunk_end + 1
+        
         return all_transactions
     
-    def _format_webhook_transaction(self, tx: Dict) -> Dict:
-        """Форматування транзакції з TokenView Webhook History у стандартний формат"""
-        # Отримуємо значення tokenValue (зміна балансу токену)
-        # tokenValue у webhook може бути вже конвертованим значенням (не в wei)
-        value_str = str(tx.get('tokenValue') or tx.get('value') or '0')
-        
-        # Видаляємо знак "-" якщо є (для вхідних транзакцій він не повинен бути)
-        is_negative = value_str.startswith('-')
-        if is_negative:
-            value_str = value_str[1:]
-        if value_str.startswith('+'):
-            value_str = value_str[1:]
-        
-        # Конвертуємо значення
-        # tokenValue зазвичай вже в десятковому форматі (наприклад "100.5" означає 100.5 USDT)
-        try:
-            value_decimal = float(value_str)
-            # BSC USDT має 18 decimals, але tokenValue може бути вже в правильному форматі
-            # Якщо це маленьке число (< 1000000), то це вже конвертоване значення
-            if abs(value_decimal) < 1000000:
-                # Конвертуємо з USDT в wei (18 decimals)
-                value = int(value_decimal * (10 ** 18))
-            else:
-                # Можливо вже в wei форматі
-                value = int(value_decimal)
-        except:
-            # Якщо не вдалося, спробуємо як ціле число
-            try:
-                value = int(value_str)
-            except:
-                value = 0
-        
-        # Отримуємо timestamp
-        timestamp = tx.get('time') or tx.get('timestamp') or 0
-        if isinstance(timestamp, str):
-            try:
-                timestamp = int(timestamp)
-            except:
-                timestamp = 0
-        elif not isinstance(timestamp, int):
-            timestamp = 0
-        
-        # Отримуємо block number
-        block_number = tx.get('height') or tx.get('blockHeight') or 0
-        if isinstance(block_number, str):
-            try:
-                block_number = int(block_number)
-            except:
-                block_number = 0
-        elif not isinstance(block_number, int):
-            block_number = 0
-        
-        # Отримуємо hash
-        tx_hash = tx.get('txid') or tx.get('hash') or ''
-        
-        # Отримуємо адреси
-        tx_address = tx.get('address', '')
-        # У webhook history може не бути явних полів from/to, але є address (наш гаманець)
-        
-        return {
-            'hash': tx_hash,
-            'from': '',  # У webhook history може не бути явного поля from
-            'to': tx_address,  # Адреса отримувача (наш гаманець)
-            'value': str(value),
-            'tokenSymbol': tx.get('tokenSymbol') or 'USDT',
-            'tokenDecimal': '18',
-            'timeStamp': str(timestamp),
-            'blockNumber': str(block_number),
-            'contractAddress': tx.get('tokenAddress') or USDT_CONTRACT_BSC
-        }
+    def _address_to_topic(self, address: str) -> str:
+        """Конвертація адреси в topic (32 байти, padded зліва нулями)"""
+        # Видаляємо '0x' якщо є
+        addr = address[2:] if address.startswith('0x') else address
+        # Додаємо padding зліва до 64 символів (32 байти)
+        return '0x' + addr.lower().zfill(64)
     
-    def _format_tokenview_transaction(self, tx: Dict) -> Dict:
-        """Форматування транзакції з TokenView API у стандартний формат"""
-        # Отримуємо значення (може бути в різних полях)
-        value_str = tx.get('value') or tx.get('amount') or tx.get('token_value') or '0'
-        if isinstance(value_str, str):
-            # Може бути в hex або десятковому форматі
-            if value_str.startswith('0x'):
-                value = int(value_str, 16)
-            else:
-                try:
-                    # Може бути вже в правильному форматі (wei)
-                    value = int(float(value_str))
-                except:
-                    value = 0
-        else:
-            value = int(value_str) if isinstance(value_str, (int, float)) else 0
-        
-        # Отримуємо decimals
-        decimals = int(tx.get('tokenDecimal') or tx.get('decimal') or 18)
-        
-        # Отримуємо timestamp
-        timestamp = tx.get('time') or tx.get('timestamp') or tx.get('timeStamp')
-        if isinstance(timestamp, str):
-            try:
-                timestamp = int(timestamp)
-            except:
-                timestamp = 0
-        elif not isinstance(timestamp, int):
-            timestamp = 0
-        
-        # Отримуємо block number (TokenView використовує block_no)
-        block_number = tx.get('block_no') or tx.get('blockHeight') or tx.get('blockNo') or tx.get('blockNumber') or '0'
-        if isinstance(block_number, str):
-            try:
-                block_number = int(block_number)
-            except:
-                block_number = 0
-        elif not isinstance(block_number, int):
-            block_number = 0
-        
-        # Отримуємо hash (TokenView використовує txid)
-        tx_hash = tx.get('txid') or tx.get('hash') or ''
-        
-        return {
-            'hash': tx_hash,
-            'from': tx.get('from', ''),
-            'to': tx.get('to', ''),
-            'value': str(value),
-            'tokenSymbol': tx.get('tokenSymbol') or tx.get('symbol') or 'USDT',
-            'tokenDecimal': str(decimals),
-            'timeStamp': str(timestamp),
-            'blockNumber': str(block_number),
-            'contractAddress': tx.get('contract') or tx.get('contractAddress') or USDT_CONTRACT_BSC
-        }
-    
-    def get_latest_block(self) -> Optional[int]:
-        """Отримання останнього блоку через TokenView API"""
+    def _log_to_transaction(self, log: Dict) -> Optional[Dict]:
+        """Конвертація логу Transfer event в транзакцію"""
         try:
-            # TokenView API endpoint для отримання останнього блоку
-            endpoint = "block/latest/bsc"
-            data = self._make_api_request(endpoint)
+            # Отримуємо дані з логу
+            # topics[0] = Transfer event signature
+            # topics[1] = from address
+            # topics[2] = to address
+            # data = value (uint256)
             
-            if data and isinstance(data, dict):
-                block_number = data.get('blockNo') or data.get('blockHeight') or data.get('number')
-                if block_number:
-                    return int(block_number)
-            elif isinstance(data, list) and len(data) > 0:
-                # Може повертатися список
-                block_number = data[0].get('blockNo') or data[0].get('blockHeight') or data[0].get('number')
-                if block_number:
-                    return int(block_number)
+            topics = log.get('topics', [])
+            if len(topics) < 3:
+                return None
+            
+            from_address = '0x' + topics[1][-40:]  # Останні 40 символів (20 байт адреси)
+            to_address = '0x' + topics[2][-40:]
+            
+            # Отримуємо value з data
+            value_hex = log.get('data', '0x0')
+            value = int(value_hex, 16) if value_hex != '0x' else 0
+            
+            # Отримуємо інформацію про транзакцію
+            tx_hash = log.get('transactionHash', '').hex() if hasattr(log.get('transactionHash'), 'hex') else log.get('transactionHash', '')
+            block_number = log.get('blockNumber', 0)
+            
+            # Отримуємо timestamp з блоку
+            try:
+                block = self.w3.eth.get_block(block_number)
+                timestamp = block.get('timestamp', 0)
+            except:
+                timestamp = 0
+            
+            return {
+                'hash': tx_hash,
+                'from': from_address,
+                'to': to_address,
+                'value': str(value),
+                'tokenSymbol': 'USDT',
+                'tokenDecimal': '18',
+                'timeStamp': str(timestamp),
+                'blockNumber': str(block_number),
+                'contractAddress': self.usdt_contract
+            }
         except Exception as e:
-            print(f"Помилка отримання останнього блоку через TokenView: {e}")
-        
-        # Fallback через публічні RPC endpoints
-        try:
-            from web3 import Web3
-            rpc_url = "https://bsc-dataseed.binance.org/"
-            w3 = Web3(Web3.HTTPProvider(rpc_url))
-            if w3.is_connected():
-                return w3.eth.block_number
-        except:
-            pass
-        
-        return None
+            print(f"Помилка конвертації логу: {e}")
+            return None
     
     def get_transaction_details(self, tx_hash: str) -> Optional[Dict]:
-        """Отримання деталей транзакції через TokenView API"""
+        """Отримання деталей транзакції через QuickNode RPC"""
         try:
-            endpoint = f"tx/bsc/{tx_hash}"
-            return self._make_api_request(endpoint)
+            tx = self.w3.eth.get_transaction(tx_hash)
+            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+            return {
+                'transaction': dict(tx),
+                'receipt': dict(receipt)
+            }
         except Exception as e:
             print(f"Помилка отримання деталей транзакції: {e}")
             return None

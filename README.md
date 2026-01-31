@@ -36,23 +36,18 @@ pip install -r requirements.txt
 
 ## Налаштування API
 
-**Важливо:** BSCscan API V1 більше не підтримується. Потрібно використовувати Etherscan API V2 або BSCTrace.
+**Важливо:** Зараз використовується QuickNode RPC Endpoint для моніторингу транзакцій.
 
-### Варіант 1: Etherscan API V2 (рекомендовано)
+### QuickNode RPC Endpoint (рекомендовано)
 
-1. Зареєструйтеся на https://etherscan.io/register
-2. Перейдіть на https://etherscan.io/myapikey
-3. Створіть новий API ключ
-4. **Примітка:** Для доступу до даних BSC через Etherscan API V2 потрібна платна підписка
-5. Вставте ключ у файл `config.py` в поле `BSCSCAN_API_KEY`
+1. Перейдіть на https://dashboard.quicknode.com/endpoints/new/bsc
+2. Зареєструйтеся або увійдіть у свій акаунт QuickNode
+3. Виберіть **"BNB Smart Chain"** → **"Mainnet"** (не Testnet!)
+4. Натисніть **"Continue"** та створіть endpoint
+5. Після створення, скопіюйте **HTTPS URL** (виглядає як `https://your-endpoint-name.bsc.quiknode.pro/your-api-key/`)
+6. Вставте цей URL у файл `config.py` в поле `QUICKNODE_BSC_NODE`
 
-### Варіант 2: BSCTrace через MegaNode (безкоштовно)
-
-1. Зареєструйтеся на https://meganode.nodereal.io/
-2. Створіть API ключ для BNB Chain
-3. В файлі `config.py`:
-   - Встановіть `USE_BSCTRACE = True`
-   - Вставте ваш BSCTrace API ключ в `BSCTRACE_API_KEY`
+**Примітка:** QuickNode має безкоштовний план з обмеженнями, але його достатньо для моніторингу транзакцій.
 
 ## Запуск
 

@@ -168,33 +168,31 @@ class PaymentMonitorBot:
             self.save_processed_txs()
 
 
-import requests
 import sys
-from config import GETBLOCK_BSC_NODE
 
 def check_connectivity():
     errors = []
-    print("Перевірка доступу до BSC Node (GetBlock)...")
+    print("Перевірка доступу до BSC Node (QuickNode)...")
     try:
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "eth_blockNumber",
-            "params": [],
-            "id": 1
-        }
-        headers = {"Content-Type": "application/json"}
-        resp = requests.post(GETBLOCK_BSC_NODE, json=payload, headers=headers, timeout=20)
-        resp.raise_for_status()
-        res = resp.json()
-        assert "result" in res, "Відповідь не містить поля 'result'"
-        print(f"✅ GetBlock OK. Номер останнього блоку: {int(res['result'], 16)}")
+        # Створюємо клієнт для перевірки підключення
+        from bscscan_client import BSCscanClient
+        client = BSCscanClient()
+        latest_block = client.get_latest_block()
+        if latest_block:
+            print(f"✅ QuickNode OK. Номер останнього блоку: {latest_block}")
+        else:
+            raise Exception("Не вдалося отримати номер блоку")
     except Exception as e:
-        errors.append(f"❌ GetBlock API не працює: {repr(e)} -> {getattr(e, 'response', None) and getattr(e.response, 'text', '')}")
+        errors.append(f"❌ QuickNode RPC не працює: {repr(e)}")
+        print("\n💡 Підказка:")
+        print("   1. Переконайтеся, що ви створили endpoint на https://dashboard.quicknode.com/endpoints/new/bsc")
+        print("   2. Виберіть 'Mainnet' (не Testnet)")
+        print("   3. Скопіюйте HTTPS URL та вставте його в config.py як QUICKNODE_BSC_NODE")
 
     print("Перевірка надсилання повідомлень у Telegram...")
     try:
         test_bot = PaymentMonitorBot().telegram
-        msg = "🤖 Тест старту: Бот має доступ до GetBlock та Telegram!"
+        msg = "🤖 Тест старту: Бот має доступ до QuickNode та Telegram!"
         ok = test_bot.send_message(msg)
         if ok:
             print("✅ Telegram OK: тестове повідомлення відправлено.")
@@ -212,7 +210,7 @@ def check_connectivity():
         print("BOT EXITED")
         sys.exit(1)
     else:
-        test_bot.send_message("✅ Бот стартував: доступ до API підтверджено. Починаю моніторинг!")
+        test_bot.send_message("✅ Бот стартував: доступ до QuickNode та Telegram підтверджено. Починаю моніторинг!")
 
 if __name__ == "__main__":
     check_connectivity()

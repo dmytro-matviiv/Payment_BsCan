@@ -1,6 +1,11 @@
-# Конфігураційний файл для бота через GetBlock (BSC)
+# Конфігураційний файл для бота через QuickNode (BSC)
 
-# GetBlock NODE URL (твій endpoint BSC)
+# QuickNode RPC Endpoint URL (отримайте на https://dashboard.quicknode.com/endpoints/new/bsc)
+# Після створення endpoint на QuickNode, скопіюйте HTTPS URL сюди
+QUICKNODE_BSC_NODE = "https://clean-magical-season.bsc.quiknode.pro/df5393b39afc0e2be5e6bd805bb6f86eba2a8514/"  # QuickNode endpoint URL
+# Приклад: "https://your-endpoint-name.bsc.quiknode.pro/your-api-key/"
+
+# Старий GetBlock NODE URL (залишено для резерву)
 GETBLOCK_BSC_NODE = "https://go.getblock.us/6331e58511e54706be53c9b4d8ce9ad2"
 
 # Адреса гаманця для моніторингу
