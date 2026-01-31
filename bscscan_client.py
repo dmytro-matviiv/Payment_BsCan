@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from config import (
     WALLET_ADDRESS, QUICKNODE_BSC_NODE, GETBLOCK_BSC_NODE,
     REQUEST_DELAY, MAX_RETRIES, RETRY_BASE_DELAY, MAX_RETRY_DELAY,
-    INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT
+    INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT, RATE_LIMIT_COOLDOWN
 )
 
 # USDT контракт на BSC
@@ -24,6 +24,8 @@ class BSCscanClient:
     def __init__(self, rpc_url: str = None, use_fallback: bool = True):
         self.use_fallback = use_fallback and USE_FALLBACK_ENDPOINT
         self.fallback_url = GETBLOCK_BSC_NODE if self.use_fallback else None
+        self.rate_limit_count = 0  # Лічильник rate limit помилок
+        self.dynamic_delay = REQUEST_DELAY  # Динамічна затримка, яка збільшується при rate limits
         
         if rpc_url:
             self.rpc_url = rpc_url
@@ -91,7 +93,12 @@ class BSCscanClient:
         """Виконання запиту з retry логікою для обробки 429 помилок та тимчасових помилок підключення"""
         for attempt in range(MAX_RETRIES):
             try:
-                return func(*args, **kwargs)
+                result = func(*args, **kwargs)
+                # Якщо запит успішний, трохи зменшуємо динамічну затримку (але не нижче базової)
+                if self.rate_limit_count > 0 and attempt == 0:
+                    # Після успішного запиту після rate limit, зменшуємо затримку
+                    self.dynamic_delay = max(self.dynamic_delay * 0.9, REQUEST_DELAY)
+                return result
             except Exception as e:
                 error_str = str(e).lower()
                 is_rate_limit = "429" in error_str or "too many requests" in error_str
@@ -113,11 +120,21 @@ class BSCscanClient:
                 # Експоненційний backoff з базовою затримкою
                 delay = min(RETRY_BASE_DELAY * (2 ** attempt), MAX_RETRY_DELAY)
                 if is_rate_limit:
-                    print(f"⚠️ Rate limit (429). Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
-                    # Для 429 помилок додаємо додаткову затримку
-                    if attempt >= 3:  # Після 3 спроб додаємо ще 30 секунд
-                        delay += 30
-                        print(f"   Додаткова затримка через багато 429 помилок: +30 сек")
+                    self.rate_limit_count += 1
+                    # Для першої 429 помилки одразу додаємо cooldown
+                    if attempt == 0:
+                        delay = RATE_LIMIT_COOLDOWN
+                        print(f"⚠️ Rate limit (429) виявлено! Очікування {delay:.1f} сек перед повторною спробою...")
+                    else:
+                        print(f"⚠️ Rate limit (429). Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
+                    
+                    # Для 429 помилок додаємо додаткову затримку після кількох спроб
+                    if attempt >= 2:  # Після 2 спроб додаємо ще 60 секунд
+                        delay += 60
+                        print(f"   Додаткова затримка через багато 429 помилок: +60 сек")
+                    
+                    # Збільшуємо динамічну затримку між запитами
+                    self.dynamic_delay = min(self.dynamic_delay * 1.5, 10.0)
                 else:
                     print(f"⚠️ Помилка підключення. Спробa {attempt + 1}/{MAX_RETRIES}. Очікування {delay:.1f} сек...")
                 time.sleep(delay)
@@ -183,9 +200,9 @@ class BSCscanClient:
                         if tx:
                             all_transactions.append(tx)
                 
-                # Затримка між запитами для уникнення rate limiting
-                if block_num < end_block and REQUEST_DELAY > 0:
-                    time.sleep(REQUEST_DELAY)
+                # Затримка між запитами для уникнення rate limiting (використовуємо динамічну затримку)
+                if block_num < end_block and self.dynamic_delay > 0:
+                    time.sleep(self.dynamic_delay)
                 
             except Exception as e:
                 # Якщо помилка 413 або подібна, просто пропускаємо блок

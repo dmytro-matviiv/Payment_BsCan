@@ -2,7 +2,7 @@
 
 # QuickNode RPC Endpoint URL (отримайте на https://dashboard.quicknode.com/endpoints/new/bsc)
 # Після створення endpoint на QuickNode, скопіюйте HTTPS URL сюди
-QUICKNODE_BSC_NODE = "https://clean-magical-season.bsc.quiknode.pro/df5393b39afc0e2be5e6bd805bb6f86eba2a8514/"  # QuickNode endpoint URL
+QUICKNODE_BSC_NODE = "https://clean-magical-season.bsc.quiknode.pro/df5393b39afc0e2be5e6bd805bb6f86eba2a8514"  # QuickNode endpoint URL (без слешу в кінці)
 # Приклад: "https://your-endpoint-name.bsc.quiknode.pro/your-api-key/"
 
 # Старий GetBlock NODE URL (залишено для резерву)
@@ -22,9 +22,10 @@ MIN_AMOUNT_USDT = 1.0  # Мінімальна сума транзакції в U
 TOKEN_SYMBOL = "USDT"  # Токен для моніторингу (тільки USDT)
 
 # Налаштування rate limiting (для уникнення 429 помилок)
-REQUEST_DELAY = 1.0  # Затримка між запитами до блоків (секунди)
-MAX_RETRIES = 8  # Максимальна кількість спроб при 429 помилці
-RETRY_BASE_DELAY = 5.0  # Базова затримка для retry (секунди, буде збільшуватися експоненційно)
-MAX_RETRY_DELAY = 120.0  # Максимальна затримка для retry (секунди)
-INITIAL_CONNECTION_DELAY = 10.0  # Затримка перед першою спробою підключення (секунди)
+REQUEST_DELAY = 2.0  # Затримка між запитами до блоків (секунди) - збільшено для уникнення rate limit
+MAX_RETRIES = 10  # Максимальна кількість спроб при 429 помилці
+RETRY_BASE_DELAY = 10.0  # Базова затримка для retry (секунди, буде збільшуватися експоненційно)
+MAX_RETRY_DELAY = 180.0  # Максимальна затримка для retry (секунди)
+INITIAL_CONNECTION_DELAY = 30.0  # Затримка перед першою спробою підключення (секунди) - збільшено
 USE_FALLBACK_ENDPOINT = True  # Використовувати резервний endpoint (GETBLOCK) якщо QuickNode не працює
+RATE_LIMIT_COOLDOWN = 60.0  # Додаткова затримка після отримання 429 помилки (секунди)
