@@ -169,17 +169,17 @@ class BSCscanClient:
             start_block = max(0, end_block - 49)
             block_range = 50
         
-        print(f"🔍 Пошук USDT транзакцій в блоках {start_block}-{end_block} ({block_range} блоків)")
-        print(f"   Контракт USDT: {self.usdt_contract}")
-        print(f"   Адреса гаманця: {address}")
-        print(f"   Адреса (checksum): {address_checksum}")
-        print(f"   Шукаємо всі USDT транзакції, потім фільтруємо по адресі")
-        
         # Перевіряємо блоки по одному для надійності
         all_transactions = []
         address_checksum = Web3.to_checksum_address(address)
         blocks_checked = 0
         blocks_with_logs = 0
+        
+        print(f"🔍 Пошук USDT транзакцій в блоках {start_block}-{end_block} ({block_range} блоків)")
+        print(f"   Контракт USDT: {self.usdt_contract}")
+        print(f"   Адреса гаманця: {address}")
+        print(f"   Адреса (checksum): {address_checksum}")
+        print(f"   Шукаємо всі USDT транзакції, потім фільтруємо по адресі")
         
         for block_num in range(start_block, end_block + 1):
             try:
