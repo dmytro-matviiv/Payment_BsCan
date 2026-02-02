@@ -170,35 +170,63 @@ class BSCscanClient:
             block_range = 50
         
         print(f"🔍 Пошук USDT транзакцій в блоках {start_block}-{end_block} ({block_range} блоків)")
+        print(f"   Контракт USDT: {self.usdt_contract}")
+        print(f"   Адреса гаманця: {address}")
+        print(f"   Адреса (checksum): {address_checksum}")
+        print(f"   Шукаємо всі USDT транзакції, потім фільтруємо по адресі")
         
         # Перевіряємо блоки по одному для надійності
         all_transactions = []
         address_checksum = Web3.to_checksum_address(address)
+        blocks_checked = 0
+        blocks_with_logs = 0
         
         for block_num in range(start_block, end_block + 1):
             try:
-                # Отримуємо логи Transfer events для одного блоку з retry логікою
-                filter_params = {
+                # Спочатку шукаємо ВСІ USDT транзакції в блоці (без фільтрації по адресі)
+                # Це дозволяє знайти транзакції навіть якщо фільтр по адресі не працює
+                filter_params_all = {
                     'fromBlock': block_num,
                     'toBlock': block_num,
                     'address': self.usdt_contract,
                     'topics': [
                         TRANSFER_EVENT_TOPIC,  # Transfer event
                         None,  # from (будь-яка)
-                        [self._address_to_topic(address_checksum)]  # to = наша адреса
+                        None   # to (будь-яка) - шукаємо всі транзакції
                     ]
                 }
                 
                 logs = self._retry_request(
-                    lambda: self.w3.eth.get_logs(filter_params)
+                    lambda: self.w3.eth.get_logs(filter_params_all)
                 )
+                
+                blocks_checked += 1
                 
                 # Обробляємо знайдені логи (якщо retry успішний)
                 if logs is not None:
+                    if len(logs) > 0:
+                        blocks_with_logs += 1
+                        print(f"   📦 Блок {block_num}: знайдено {len(logs)} USDT логів")
+                    
+                    # Фільтруємо логи по нашій адресі (як отримувача)
                     for log in logs:
                         tx = self._log_to_transaction(log, block_num)
                         if tx:
-                            all_transactions.append(tx)
+                            # Перевіряємо, чи це транзакція на нашу адресу
+                            tx_to = tx.get('to', '').lower()
+                            tx_from = tx.get('from', '').lower()
+                            
+                            # Порівнюємо адреси (case-insensitive)
+                            if tx_to == address_checksum.lower():
+                                all_transactions.append(tx)
+                                print(f"      ✅ Знайдено ВХІДНУ транзакцію:")
+                                print(f"         Hash: {tx.get('hash', '')}")
+                                print(f"         From: {tx_from}")
+                                print(f"         To: {tx_to}")
+                                print(f"         Value: {tx.get('value', '0')}")
+                            elif tx_from == address_checksum.lower():
+                                # Це вихідна транзакція, не додаємо її
+                                pass
                 
                 # Затримка між запитами для уникнення rate limiting (використовуємо динамічну затримку)
                 if block_num < end_block and self.dynamic_delay > 0:
@@ -213,7 +241,17 @@ class BSCscanClient:
                         print(f"⚠️ Помилка блоку {block_num}: {e}")
                 continue
         
+        print(f"✅ Перевірено {blocks_checked} блоків")
+        print(f"   Блоків з логами: {blocks_with_logs}")
         print(f"✅ Знайдено {len(all_transactions)} транзакцій USDT")
+        
+        if len(all_transactions) == 0 and blocks_checked > 0:
+            print(f"⚠️ Транзакції USDT не знайдено в перевірених блоках")
+            print(f"   Можливі причини:")
+            print(f"   - В цих блоках немає USDT транзакцій на адресу {address}")
+            print(f"   - Транзакції можуть бути в старіших блоках")
+            print(f"   - Проблеми з API через rate limiting")
+        
         return all_transactions
     
     def _address_to_topic(self, address: str) -> str:
@@ -233,8 +271,13 @@ class BSCscanClient:
             topic1 = topics[1].hex() if hasattr(topics[1], 'hex') else str(topics[1])
             topic2 = topics[2].hex() if hasattr(topics[2], 'hex') else str(topics[2])
             
-            from_addr = '0x' + topic1[-40:].lower()
-            to_addr = '0x' + topic2[-40:].lower()
+            # Витягуємо адреси з topics (останні 40 символів після '0x')
+            # Topics мають формат: 0x + 24 нулі + 40 символів адреси
+            from_addr_raw = topic1[-40:] if len(topic1) >= 42 else topic1.replace('0x', '').zfill(64)[-40:]
+            to_addr_raw = topic2[-40:] if len(topic2) >= 42 else topic2.replace('0x', '').zfill(64)[-40:]
+            
+            from_addr = '0x' + from_addr_raw.lower()
+            to_addr = '0x' + to_addr_raw.lower()
             
             # Отримуємо value з data
             data = log.get('data', '0x0')
