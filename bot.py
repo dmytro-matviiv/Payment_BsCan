@@ -174,6 +174,7 @@ import sys
 def check_connectivity():
     """Перевірка підключення"""
     errors = []
+    warnings = []
     print("🔍 Перевірка підключення...")
     
     # Перевірка QuickNode
@@ -184,16 +185,18 @@ def check_connectivity():
         if latest_block:
             print(f"✅ QuickNode OK. Блок: {latest_block}")
         else:
-            raise Exception("Не вдалося отримати блок")
+            warnings.append("⚠️ QuickNode: Не вдалося отримати блок (може бути тимчасово)")
     except Exception as e:
         error_msg = str(e)
         # Витягуємо основну помилку без повного traceback
         if "ConnectionError" in error_msg or "Не вдалося підключитися" in error_msg:
-            errors.append(f"❌ QuickNode: Не вдалося підключитися до QuickNode")
+            warnings.append(f"⚠️ QuickNode: Не вдалося підключитися (спроба буде повторена)")
         else:
-            errors.append(f"❌ QuickNode: {error_msg}")
+            warnings.append(f"⚠️ QuickNode: {error_msg}")
     
     # Перевірка Telegram (окремо, без створення PaymentMonitorBot)
+    telegram_ok = False
+    test_telegram = None
     try:
         from telegram_bot import TelegramBot
         test_telegram = TelegramBot()
@@ -201,8 +204,9 @@ def check_connectivity():
         ok = test_telegram.send_message(msg)
         if ok:
             print("✅ Telegram OK")
+            telegram_ok = True
         else:
-            raise Exception("Telegram повернув помилку")
+            warnings.append("⚠️ Telegram: Не вдалося відправити тестове повідомлення")
     except Exception as e:
         error_msg = str(e)
         # Витягуємо основну помилку
@@ -210,22 +214,40 @@ def check_connectivity():
             # Це помилка від QuickNode, не від Telegram
             pass  # Вже додано вище
         else:
-            errors.append(f"❌ Telegram: {error_msg}")
+            warnings.append(f"⚠️ Telegram: {error_msg}")
     
-    if errors:
-        print("\n❌ Помилки:")
-        for err in errors:
-            print(f"   {err}")
-        print("\nПеревірте налаштування в config.py")
-        sys.exit(1)
-    else:
-        # Відправляємо повідомлення про успішний старт
+    if warnings:
+        print("\n⚠️ Попередження:")
+        for warn in warnings:
+            print(f"   {warn}")
+        print("\nБот продовжить роботу, але деякі функції можуть не працювати.")
+        print("Перевірте налаштування в config.py якщо проблеми зберігаються.\n")
+    
+    # Не зупиняємо контейнер навіть якщо є попередження
+    # Контейнер має продовжити роботу і спробувати підключитися пізніше
+    if telegram_ok and test_telegram:
+        # Відправляємо повідомлення про успішний старт тільки якщо Telegram працює
         try:
             test_telegram.send_message("✅ Бот стартував! Моніторинг активний.")
         except:
             pass  # Не критично, якщо не вдалося відправити
 
 if __name__ == "__main__":
-    check_connectivity()
-    bot = PaymentMonitorBot()
-    bot.run()
+    try:
+        check_connectivity()
+        bot = PaymentMonitorBot()
+        bot.run()
+    except KeyboardInterrupt:
+        print("\n\n🛑 Бот зупинено користувачем")
+    except Exception as e:
+        print(f"\n\n❌ Критична помилка: {e}")
+        import traceback
+        traceback.print_exc()
+        # Не виходимо з sys.exit, щоб контейнер не падав
+        # Просто чекаємо і спробуємо перезапустити
+        print("\n⏳ Очікування 60 секунд перед повторною спробою...")
+        time.sleep(60)
+        # Спробуємо перезапустити
+        print("🔄 Перезапуск бота...")
+        bot = PaymentMonitorBot()
+        bot.run()
