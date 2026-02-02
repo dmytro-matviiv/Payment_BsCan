@@ -174,6 +174,7 @@ class BSCscanClient:
         address_checksum = Web3.to_checksum_address(address)
         blocks_checked = 0
         blocks_with_logs = 0
+        block_cache = {}  # Кеш для блоків (щоб не запитувати один блок кілька разів)
         
         print(f"🔍 Пошук USDT транзакцій в блоках {start_block}-{end_block} ({block_range} блоків)")
         print(f"   Контракт USDT: {self.usdt_contract}")
@@ -208,9 +209,19 @@ class BSCscanClient:
                         blocks_with_logs += 1
                         print(f"   📦 Блок {block_num}: знайдено {len(logs)} USDT логів")
                     
+                    # Отримуємо timestamp блоку один раз (кешуємо)
+                    if block_num not in block_cache:
+                        try:
+                            block = self._retry_request(lambda: self.w3.eth.get_block(block_num, full_transactions=False))
+                            block_cache[block_num] = block.get('timestamp', 0) if block else 0
+                        except:
+                            block_cache[block_num] = 0
+                    
+                    block_timestamp = block_cache[block_num]
+                    
                     # Фільтруємо логи по нашій адресі (як отримувача)
                     for log in logs:
-                        tx = self._log_to_transaction(log, block_num)
+                        tx = self._log_to_transaction(log, block_num, block_timestamp)
                         if tx:
                             # Перевіряємо, чи це транзакція на нашу адресу
                             tx_to = tx.get('to', '').lower()
@@ -229,8 +240,14 @@ class BSCscanClient:
                                 pass
                 
                 # Затримка між запитами для уникнення rate limiting (використовуємо динамічну затримку)
-                if block_num < end_block and self.dynamic_delay > 0:
-                    time.sleep(self.dynamic_delay)
+                if block_num < end_block:
+                    # Якщо знайдено багато логів, збільшуємо затримку
+                    if logs and len(logs) > 20:
+                        delay = self.dynamic_delay * 2  # Подвоюємо затримку для блоків з багатьма логами
+                        print(f"      ⏳ Багато логів ({len(logs)}), затримка {delay:.1f} сек...")
+                        time.sleep(delay)
+                    elif self.dynamic_delay > 0:
+                        time.sleep(self.dynamic_delay)
                 
             except Exception as e:
                 # Якщо помилка 413 або подібна, просто пропускаємо блок
@@ -259,7 +276,7 @@ class BSCscanClient:
         addr = address[2:] if address.startswith('0x') else address
         return '0x' + addr.lower().zfill(64)
     
-    def _log_to_transaction(self, log: Dict, block_number: int) -> Optional[Dict]:
+    def _log_to_transaction(self, log: Dict, block_number: int, timestamp: int = 0) -> Optional[Dict]:
         """Конвертація логу Transfer event в транзакцію"""
         try:
             # Отримуємо адреси з topics
@@ -295,12 +312,7 @@ class BSCscanClient:
             elif not isinstance(tx_hash, str):
                 tx_hash = str(tx_hash)
             
-            # Отримуємо timestamp з блоку з retry логікою
-            try:
-                block = self._retry_request(lambda: self.w3.eth.get_block(block_number))
-                timestamp = block.get('timestamp', 0) if block else 0
-            except:
-                timestamp = 0
+            # Використовуємо переданий timestamp (не робимо додатковий запит)
             
             return {
                 'hash': tx_hash,
