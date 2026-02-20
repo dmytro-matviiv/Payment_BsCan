@@ -9,7 +9,7 @@ from config import (
     WALLET_ADDRESS, QUICKNODE_BSC_NODE, GETBLOCK_BSC_NODE,
     REQUEST_DELAY, MAX_RETRIES, RETRY_BASE_DELAY, MAX_RETRY_DELAY,
     INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT, RATE_LIMIT_COOLDOWN,
-    MAX_BLOCKS_PER_CHECK
+    MAX_BLOCKS_PER_CHECK, USE_BLOCK_TIMESTAMP
 )
 
 # USDT контракт на BSC
@@ -228,15 +228,21 @@ class BSCscanClient:
                         blocks_with_logs += 1
                         print(f"   📦 Блок {block_num}: знайдено {len(logs)} USDT логів")
                     
-                    # Отримуємо timestamp блоку один раз (кешуємо)
-                    if block_num not in block_cache:
-                        try:
-                            block = self._retry_request(lambda: self.w3.eth.get_block(block_num, full_transactions=False))
-                            block_cache[block_num] = block.get('timestamp', 0) if block else 0
-                        except Exception as block_error:
-                            block_cache[block_num] = 0
-                    
-                    block_timestamp = block_cache[block_num]
+                    # Отримуємо timestamp блоку один раз (кешуємо), якщо це увімкнено в конфігурації
+                    if USE_BLOCK_TIMESTAMP:
+                        if block_num not in block_cache:
+                            try:
+                                block = self._retry_request(
+                                    lambda: self.w3.eth.get_block(block_num, full_transactions=False)
+                                )
+                                block_cache[block_num] = block.get('timestamp', 0) if block else 0
+                            except Exception:
+                                block_cache[block_num] = 0
+                        block_timestamp = block_cache.get(block_num, 0)
+                    else:
+                        # Для економії API credits не робимо додатковий запит до блоку
+                        # і просто ставимо timestamp = 0 (далі буде "N/A" у форматуванні)
+                        block_timestamp = 0
                     
                     # Фільтруємо логи по нашій адресі (як отримувача)
                     for log in logs:
