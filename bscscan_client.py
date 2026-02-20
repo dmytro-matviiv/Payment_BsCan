@@ -8,7 +8,8 @@ from typing import List, Dict, Optional
 from config import (
     WALLET_ADDRESS, QUICKNODE_BSC_NODE, GETBLOCK_BSC_NODE,
     REQUEST_DELAY, MAX_RETRIES, RETRY_BASE_DELAY, MAX_RETRY_DELAY,
-    INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT, RATE_LIMIT_COOLDOWN
+    INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT, RATE_LIMIT_COOLDOWN,
+    MAX_BLOCKS_PER_CHECK
 )
 
 # USDT контракт на BSC
@@ -109,9 +110,22 @@ class BSCscanClient:
                     "network" in error_str or
                     "temporarily unavailable" in error_str
                 )
+                # Обробляємо помилки про занадто багато результатів (413, query too large тощо)
+                is_query_too_large = (
+                    "413" in error_str or
+                    "query returned more than" in error_str or
+                    "too large" in error_str or
+                    "query size" in error_str
+                )
                 
                 # Retry для rate limit та тимчасових помилок підключення
+                # Для помилок "query too large" не робимо retry - просто пропускаємо
                 should_retry = (is_rate_limit or is_connection_error) and attempt < MAX_RETRIES - 1
+                
+                if is_query_too_large:
+                    # Для помилок "query too large" не робимо retry - просто повертаємо None
+                    print(f"⚠️ Запит занадто великий для блоку (413/query too large), пропускаємо...")
+                    return None
                 
                 if not should_retry:
                     # Якщо це не тимчасова помилка або остання спроба, викидаємо помилку
@@ -152,7 +166,7 @@ class BSCscanClient:
     def get_token_transactions(self, address: str = WALLET_ADDRESS, start_block: int = 0, 
                                end_block: int = 99999999) -> List[Dict]:
         """Отримання USDT транзакцій для адреси"""
-        # Обмежуємо діапазон блоків (максимум 50 блоків за раз)
+        # Обмежуємо діапазон блоків (максимум MAX_BLOCKS_PER_CHECK блоків за раз для економії API credits)
         latest = self.get_latest_block()
         if not latest:
             return []
@@ -164,10 +178,10 @@ class BSCscanClient:
             start_block = 0
         
         block_range = end_block - start_block + 1
-        if block_range > 50:
-            # Якщо діапазон занадто великий, перевіряємо тільки останні 50 блоків
-            start_block = max(0, end_block - 49)
-            block_range = 50
+        if block_range > MAX_BLOCKS_PER_CHECK:
+            # Якщо діапазон занадто великий, перевіряємо тільки останні MAX_BLOCKS_PER_CHECK блоків
+            start_block = max(0, end_block - (MAX_BLOCKS_PER_CHECK - 1))
+            block_range = MAX_BLOCKS_PER_CHECK
         
         # Перевіряємо блоки по одному для надійності
         all_transactions = []
@@ -205,6 +219,11 @@ class BSCscanClient:
                 
                 # Обробляємо знайдені логи (якщо retry успішний)
                 if logs is not None:
+                    # Перевіряємо, чи logs є списком
+                    if not isinstance(logs, list):
+                        print(f"      ⚠️ Блок {block_num}: отримано некоректний тип даних (очікувався список)")
+                        continue
+                    
                     if len(logs) > 0:
                         blocks_with_logs += 1
                         print(f"   📦 Блок {block_num}: знайдено {len(logs)} USDT логів")
@@ -214,30 +233,46 @@ class BSCscanClient:
                         try:
                             block = self._retry_request(lambda: self.w3.eth.get_block(block_num, full_transactions=False))
                             block_cache[block_num] = block.get('timestamp', 0) if block else 0
-                        except:
+                        except Exception as block_error:
                             block_cache[block_num] = 0
                     
                     block_timestamp = block_cache[block_num]
                     
                     # Фільтруємо логи по нашій адресі (як отримувача)
                     for log in logs:
-                        tx = self._log_to_transaction(log, block_num, block_timestamp)
-                        if tx:
-                            # Перевіряємо, чи це транзакція на нашу адресу
-                            tx_to = tx.get('to', '').lower()
-                            tx_from = tx.get('from', '').lower()
+                        try:
+                            # Перевіряємо, чи log є словником
+                            if not isinstance(log, dict):
+                                continue
                             
-                            # Порівнюємо адреси (case-insensitive)
-                            if tx_to == address_checksum.lower():
-                                all_transactions.append(tx)
-                                print(f"      ✅ Знайдено ВХІДНУ транзакцію:")
-                                print(f"         Hash: {tx.get('hash', '')}")
-                                print(f"         From: {tx_from}")
-                                print(f"         To: {tx_to}")
-                                print(f"         Value: {tx.get('value', '0')}")
-                            elif tx_from == address_checksum.lower():
-                                # Це вихідна транзакція, не додаємо її
-                                pass
+                            tx = self._log_to_transaction(log, block_num, block_timestamp)
+                            if tx:
+                                # Перевіряємо, чи це транзакція на нашу адресу
+                                tx_to = tx.get('to', '').lower()
+                                tx_from = tx.get('from', '').lower()
+                                
+                                # Перевіряємо, чи адреси не порожні
+                                if not tx_to or not tx_from:
+                                    continue
+                                
+                                # Порівнюємо адреси (case-insensitive)
+                                if tx_to == address_checksum.lower():
+                                    all_transactions.append(tx)
+                                    print(f"      ✅ Знайдено ВХІДНУ транзакцію:")
+                                    print(f"         Hash: {tx.get('hash', '')}")
+                                    print(f"         From: {tx_from}")
+                                    print(f"         To: {tx_to}")
+                                    print(f"         Value: {tx.get('value', '0')}")
+                                elif tx_from == address_checksum.lower():
+                                    # Це вихідна транзакція, не додаємо її
+                                    pass
+                        except Exception as log_error:
+                            # Пропускаємо пошкоджені логи, щоб не зупиняти обробку
+                            error_str = str(log_error).lower()
+                            # Не виводимо помилки для типових проблем (некоректні формати даних тощо)
+                            if "index" not in error_str and "out of range" not in error_str and "none" not in error_str:
+                                print(f"      ⚠️ Помилка обробки логу в блоці {block_num}: {log_error}")
+                            continue
                 
                 # Затримка між запитами для уникнення rate limiting (використовуємо динамічну затримку)
                 if block_num < end_block:
@@ -279,41 +314,84 @@ class BSCscanClient:
     def _log_to_transaction(self, log: Dict, block_number: int, timestamp: int = 0) -> Optional[Dict]:
         """Конвертація логу Transfer event в транзакцію"""
         try:
+            # Перевірка наявності логу
+            if not log or not isinstance(log, dict):
+                return None
+            
             # Отримуємо адреси з topics
             topics = log.get('topics', [])
-            if len(topics) < 3:
+            if not topics or len(topics) < 3:
+                return None
+            
+            # Перевіряємо, чи topics не None
+            if topics[1] is None or topics[2] is None:
                 return None
             
             # Конвертуємо topics в рядки
-            topic1 = topics[1].hex() if hasattr(topics[1], 'hex') else str(topics[1])
-            topic2 = topics[2].hex() if hasattr(topics[2], 'hex') else str(topics[2])
+            try:
+                topic1 = topics[1].hex() if hasattr(topics[1], 'hex') else str(topics[1])
+                topic2 = topics[2].hex() if hasattr(topics[2], 'hex') else str(topics[2])
+            except (AttributeError, IndexError, TypeError) as e:
+                return None
+            
+            # Перевіряємо формат topics
+            if not topic1 or not topic2:
+                return None
             
             # Витягуємо адреси з topics (останні 40 символів після '0x')
             # Topics мають формат: 0x + 24 нулі + 40 символів адреси
-            from_addr_raw = topic1[-40:] if len(topic1) >= 42 else topic1.replace('0x', '').zfill(64)[-40:]
-            to_addr_raw = topic2[-40:] if len(topic2) >= 42 else topic2.replace('0x', '').zfill(64)[-40:]
-            
-            from_addr = '0x' + from_addr_raw.lower()
-            to_addr = '0x' + to_addr_raw.lower()
+            try:
+                # Нормалізуємо topic (прибираємо 0x якщо є, додаємо якщо немає)
+                topic1_clean = topic1.replace('0x', '').zfill(64)
+                topic2_clean = topic2.replace('0x', '').zfill(64)
+                
+                # Беремо останні 40 символів (адреса)
+                from_addr_raw = topic1_clean[-40:] if len(topic1_clean) >= 40 else topic1_clean
+                to_addr_raw = topic2_clean[-40:] if len(topic2_clean) >= 40 else topic2_clean
+                
+                # Перевіряємо, чи адреси мають правильну довжину
+                if len(from_addr_raw) != 40 or len(to_addr_raw) != 40:
+                    return None
+                
+                from_addr = '0x' + from_addr_raw.lower()
+                to_addr = '0x' + to_addr_raw.lower()
+            except (ValueError, IndexError, TypeError) as e:
+                return None
             
             # Отримуємо value з data
-            data = log.get('data', '0x0')
-            if hasattr(data, 'hex'):
-                value_hex = data.hex()
-            else:
-                value_hex = data if isinstance(data, str) else '0x0'
-            
-            value = int(value_hex, 16) if value_hex and value_hex != '0x' else 0
+            try:
+                data = log.get('data', '0x0')
+                if hasattr(data, 'hex'):
+                    value_hex = data.hex()
+                else:
+                    value_hex = data if isinstance(data, str) else '0x0'
+                
+                # Перевіряємо формат value_hex
+                if not value_hex or value_hex == '0x':
+                    value = 0
+                else:
+                    value = int(value_hex, 16)
+            except (ValueError, TypeError) as e:
+                value = 0
             
             # Отримуємо transaction hash
-            tx_hash = log.get('transactionHash', '')
-            if hasattr(tx_hash, 'hex'):
-                tx_hash = tx_hash.hex()
-            elif not isinstance(tx_hash, str):
-                tx_hash = str(tx_hash)
+            try:
+                tx_hash = log.get('transactionHash', '')
+                if not tx_hash:
+                    return None
+                
+                if hasattr(tx_hash, 'hex'):
+                    tx_hash = tx_hash.hex()
+                elif not isinstance(tx_hash, str):
+                    tx_hash = str(tx_hash)
+                
+                # Перевіряємо формат hash
+                if not tx_hash or len(tx_hash) < 10:
+                    return None
+            except (AttributeError, TypeError) as e:
+                return None
             
             # Використовуємо переданий timestamp (не робимо додатковий запит)
-            
             return {
                 'hash': tx_hash,
                 'from': from_addr,
@@ -326,7 +404,8 @@ class BSCscanClient:
                 'contractAddress': self.usdt_contract
             }
         except Exception as e:
-            print(f"⚠️ Помилка обробки логу: {e}")
+            # Не виводимо помилку для кожного некоректного логу (їх може бути багато)
+            # Помилка буде оброблена на вищому рівні
             return None
     
     def format_transaction(self, tx: Dict) -> Dict:
