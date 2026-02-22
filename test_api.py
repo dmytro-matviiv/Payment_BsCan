@@ -22,7 +22,6 @@ def test_api():
     
     print("Тест пошуку USDT транзакцій (останні 50 блоків)...")
     transactions = client.get_token_transactions(
-        address=WALLET_ADDRESS,
         start_block=latest_block - 49,
         end_block=latest_block
     )

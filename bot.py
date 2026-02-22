@@ -19,6 +19,7 @@ class PaymentMonitorBot:
         self.processed_txs: Set[str] = set()
         self.start_block: Optional[int] = None
         self.load_processed_txs()
+        self.bscscan.run_diagnostic()
         self.init_start_block()
         
     def load_processed_txs(self):
@@ -79,7 +80,6 @@ class PaymentMonitorBot:
             print(f"📊 Перевірка блоків {start_block} - {end_block} ({end_block - start_block + 1} блоків)")
             
             transactions = self.bscscan.get_token_transactions(
-                address=WALLET_ADDRESS,
                 start_block=start_block,
                 end_block=end_block
             )
@@ -153,31 +153,12 @@ class PaymentMonitorBot:
             self.save_processed_txs()
 
 
-def check_connectivity():
-    """Перевірка підключення перед запуском"""
-    print("🔍 Перевірка підключення...")
-    try:
-        client = BSCscanClient()
-        block = client.get_latest_block()
-        if block:
-            print(f"✅ QuickNode OK. Блок: {block}")
-        else:
-            print("⚠️ QuickNode: Не вдалося отримати блок")
-    except Exception as e:
-        print(f"⚠️ QuickNode: {e}")
-    
+if __name__ == "__main__":
+    bot = PaymentMonitorBot()
     try:
         tg = TelegramBot()
-        if tg.send_message("🤖 Тест: Бот працює!"):
-            print("✅ Telegram OK")
-            tg.send_message("✅ Бот стартував! Моніторинг активний.")
-        else:
-            print("⚠️ Telegram: Не вдалося відправити")
+        tg.send_message("✅ Бот стартував! Моніторинг активний.")
+        print("✅ Telegram OK")
     except Exception as e:
         print(f"⚠️ Telegram: {e}")
-
-
-if __name__ == "__main__":
-    check_connectivity()
-    bot = PaymentMonitorBot()
     bot.run()

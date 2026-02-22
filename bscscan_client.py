@@ -1,14 +1,14 @@
 """
 Модуль для роботи з BSC через QuickNode RPC.
-Використовує get_logs з topics[2]=[address_topic] — підтверджено працює на QuickNode.
-Запити по 1 блоку щоб уникнути 413.
+Використовує get_logs з topics[2]=[address_topic] для фільтрації на рівні RPC.
+Діапазонні запити замість поблокових — 20x економія API credits.
 """
 import time
 from web3 import Web3
 from typing import List, Dict, Optional, Any
 from config import (
     WALLET_ADDRESS, QUICKNODE_BSC_NODE, GETBLOCK_BSC_NODE,
-    REQUEST_DELAY, MAX_BLOCKS_PER_CHECK, USE_BLOCK_TIMESTAMP,
+    REQUEST_DELAY, USE_BLOCK_TIMESTAMP,
     INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT,
 )
 
@@ -42,7 +42,6 @@ class BSCscanClient:
         self.usdt_contract = Web3.to_checksum_address(USDT_CONTRACT_BSC)
         self.wallet_lower = WALLET_ADDRESS.lower()
 
-        # Адреса гаманця як topic (32 байти, padded зліва нулями)
         raw = WALLET_ADDRESS.replace("0x", "").lower()
         self.wallet_topic = "0x" + raw.zfill(64)
 
@@ -51,6 +50,10 @@ class BSCscanClient:
             time.sleep(INITIAL_CONNECTION_DELAY)
 
         self._verify_connection()
+
+        print(f"🔧 USDT контракт: {self.usdt_contract}")
+        print(f"🔧 Wallet: {self.wallet_lower}")
+        print(f"🔧 Wallet topic: {self.wallet_topic}")
 
     def _verify_connection(self):
         print(f"🔌 Підключення: {self.rpc_url[:50]}...")
@@ -80,31 +83,139 @@ class BSCscanClient:
             print(f"❌ get_latest_block: {e}")
             return None
 
+    def run_diagnostic(self) -> bool:
+        """
+        Діагностика при старті: шукаємо останню USDT транзакцію НА гаманець.
+        Якщо знаходимо — все працює. Якщо ні — є проблема з фільтрацією.
+        """
+        print(f"\n{'='*60}")
+        print(f"🧪 ДІАГНОСТИКА")
+        print(f"{'='*60}")
+
+        latest = self.get_latest_block()
+        if not latest:
+            print("❌ Не вдалося отримати блок")
+            return False
+
+        print(f"📦 Останній блок: {latest}")
+
+        # Крок 1: Шукаємо USDT транзакції НА наш гаманець за останні ~50 хвилин (10000 блоків)
+        from_block = max(0, latest - 10000)
+        print(f"🔍 Пошук USDT на {self.wallet_lower[:12]}... в блоках {from_block}-{latest}...")
+
+        try:
+            logs = self.w3.eth.get_logs({
+                "fromBlock": from_block,
+                "toBlock": latest,
+                "address": self.usdt_contract,
+                "topics": [TRANSFER_EVENT_TOPIC, None, [self.wallet_topic]],
+            })
+
+            if logs:
+                print(f"✅ Знайдено {len(logs)} USDT транзакцій за ~50 хв!")
+                for lg in logs:
+                    tx_hash = _to_hex(lg.get("transactionHash", ""))
+                    bn = lg.get("blockNumber", 0)
+                    data_hex = _to_hex(lg.get("data", "0x0"))
+                    value = int(data_hex, 16) if data_hex and data_hex != "0x" else 0
+                    amount = value / 1e18
+                    from_addr = _extract_address(lg["topics"][1]) if len(lg.get("topics", [])) > 1 else "?"
+                    print(f"   💰 Блок {bn}: {amount:.2f} USDT від {from_addr[:16]}...")
+                    print(f"      TX: {tx_hash}")
+                print(f"✅ get_logs з topics[2] фільтром ПРАЦЮЄ!")
+                return True
+            else:
+                print(f"ℹ️ 0 транзакцій за 10000 блоків — можливо давно не було платежів")
+        except Exception as e:
+            print(f"⚠️ Помилка get_logs (10000 блоків): {e}")
+            print(f"   Спробуємо менший діапазон...")
+
+            # Спробуємо менший діапазон
+            from_block = max(0, latest - 1000)
+            try:
+                logs = self.w3.eth.get_logs({
+                    "fromBlock": from_block,
+                    "toBlock": latest,
+                    "address": self.usdt_contract,
+                    "topics": [TRANSFER_EVENT_TOPIC, None, [self.wallet_topic]],
+                })
+                print(f"   1000 блоків: знайдено {len(logs)} логів")
+                if logs:
+                    print(f"   ✅ Фільтрація працює!")
+                    return True
+            except Exception as e2:
+                print(f"   ⚠️ 1000 блоків теж помилка: {e2}")
+
+        # Крок 2: Перевірка без фільтра (є взагалі USDT події?)
+        print(f"\n🔍 Контрольний тест: ALL USDT в 1 блоці (без wallet фільтра)...")
+        try:
+            logs_all = self.w3.eth.get_logs({
+                "fromBlock": latest,
+                "toBlock": latest,
+                "address": self.usdt_contract,
+                "topics": [TRANSFER_EVENT_TOPIC],
+            })
+            print(f"   Блок {latest}: {len(logs_all)} USDT подій (всіх)")
+            if logs_all:
+                print(f"   ✅ RPC повертає логи — get_logs працює")
+            else:
+                print(f"   ⚠️ 0 подій навіть без фільтра — дивно")
+        except Exception as e:
+            print(f"   ❌ Помилка: {e}")
+            return False
+
+        print(f"{'='*60}")
+        return True
+
     def get_token_transactions(
-        self, address: str = WALLET_ADDRESS, start_block: int = 0, end_block: int = 99999999
+        self, start_block: int = 0, end_block: int = 99999999
     ) -> List[Dict]:
         """
         Пошук USDT транзакцій НА адресу.
-        Використовує topics[2]=[wallet_topic] — QuickNode фільтрує на рівні RPC.
-        Запити по 1 блоку щоб уникнути 413.
+        ОДИН діапазонний запит get_logs з topics[2]=[wallet_topic].
+        Якщо діапазон завеликий (413), розбиває на менші частини.
         """
-        latest = self.get_latest_block()
-        if not latest:
-            return []
-
-        end_block = min(end_block, latest)
         start_block = max(0, start_block)
         if start_block > end_block:
             return []
 
-        if (end_block - start_block + 1) > MAX_BLOCKS_PER_CHECK:
-            start_block = end_block - (MAX_BLOCKS_PER_CHECK - 1)
-
         block_count = end_block - start_block + 1
-        print(f"🔍 Пошук USDT в блоках {start_block}-{end_block} ({block_count} блоків)")
+        print(f"🔍 get_logs {start_block}-{end_block} ({block_count} блоків)")
+
+        filter_params = {
+            "fromBlock": start_block,
+            "toBlock": end_block,
+            "address": self.usdt_contract,
+            "topics": [TRANSFER_EVENT_TOPIC, None, [self.wallet_topic]],
+        }
 
         all_txs = []
 
+        try:
+            logs = self.w3.eth.get_logs(filter_params)
+            print(f"   📋 Отримано {len(logs)} подій")
+
+            for lg in logs:
+                bn = lg.get("blockNumber", 0)
+                tx = self._parse_log(lg, bn)
+                if tx:
+                    all_txs.append(tx)
+                    print(f"   ✅ Блок {bn}: {int(tx['value'])/1e18:.2f} USDT від {tx['from'][:16]}...")
+
+        except Exception as e:
+            err_str = str(e).lower()
+            print(f"   ⚠️ get_logs ПОМИЛКА: {e}")
+
+            if "413" in err_str or "too large" in err_str or "query returned more" in err_str:
+                print(f"   🔄 Діапазон завеликий, по 1 блоку...")
+                all_txs = self._get_logs_per_block(start_block, end_block)
+
+        print(f"   ✅ Результат: {len(all_txs)} транзакцій USDT")
+        return all_txs
+
+    def _get_logs_per_block(self, start_block: int, end_block: int) -> List[Dict]:
+        """Запасний варіант: поблочні запити."""
+        txs = []
         for bn in range(start_block, end_block + 1):
             try:
                 logs = self.w3.eth.get_logs({
@@ -113,23 +224,17 @@ class BSCscanClient:
                     "address": self.usdt_contract,
                     "topics": [TRANSFER_EVENT_TOPIC, None, [self.wallet_topic]],
                 })
-
                 for lg in logs:
                     tx = self._parse_log(lg, bn)
                     if tx:
-                        all_txs.append(tx)
-                        print(f"   ✅ Блок {bn}: {int(tx['value'])/1e18:.2f} USDT від {tx['from'][:12]}...")
-
+                        txs.append(tx)
+                        print(f"      ✅ Блок {bn}: {int(tx['value'])/1e18:.2f} USDT")
             except Exception as e:
-                err = str(e).lower()
-                if "413" not in err and "too large" not in err:
-                    print(f"   ⚠️ Блок {bn}: {e}")
+                print(f"      ⚠️ Блок {bn}: {e}")
 
             if bn < end_block and REQUEST_DELAY > 0:
                 time.sleep(REQUEST_DELAY)
-
-        print(f"✅ Знайдено {len(all_txs)} транзакцій USDT")
-        return all_txs
+        return txs
 
     def _parse_log(self, lg: Any, block_num: int) -> Optional[Dict]:
         try:
