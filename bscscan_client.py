@@ -2,9 +2,8 @@
 Модуль для моніторингу USDT транзакцій на BSC.
 
 Стратегія:
-1. Спробувати BSCScan API (api.bscscan.com) — може ще працювати
-2. Якщо ні — QuickNode RPC: get_logs з topics[0] only + фільтрація в Python
-   (topics[2] фільтр НЕ працює на QuickNode BSC free tier)
+1. Etherscan API V2 (api.etherscan.io/v2/api?chainid=56) — основний метод
+2. QuickNode RPC: get_logs з topics[0] + фільтрація в Python — фоллбек
 """
 import time
 import requests as http_requests
@@ -13,12 +12,11 @@ from typing import List, Dict, Optional, Any
 from config import (
     WALLET_ADDRESS, QUICKNODE_BSC_NODE, GETBLOCK_BSC_NODE,
     INITIAL_CONNECTION_DELAY, USE_FALLBACK_ENDPOINT, BSCSCAN_API_KEY,
-    CHECK_INTERVAL,
 )
 
 USDT_CONTRACT_BSC = "0x55d398326f99059fF775485246999027B3197955"
 TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-BSCSCAN_API_URL = "https://api.bscscan.com/api"
+ETHERSCAN_V2_URL = "https://api.etherscan.io/v2/api"
 
 
 def _to_hex(val: Any) -> str:
@@ -45,43 +43,42 @@ class BSCscanClient:
 
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": 30}))
         self.usdt_contract = Web3.to_checksum_address(USDT_CONTRACT_BSC)
-        self.usdt_lower = USDT_CONTRACT_BSC.lower()
         self.wallet_lower = WALLET_ADDRESS.lower()
 
-        self.use_bscscan_api = False
+        self.use_etherscan = False
 
         if INITIAL_CONNECTION_DELAY > 0:
-            print(f"⏳ Очікування {INITIAL_CONNECTION_DELAY} сек...")
+            print(f"⏳ Очікування {INITIAL_CONNECTION_DELAY} сек...", flush=True)
             time.sleep(INITIAL_CONNECTION_DELAY)
 
         self._verify_connection()
 
     def _verify_connection(self):
-        print(f"🔌 Підключення: {self.rpc_url[:50]}...")
+        print(f"🔌 Підключення: {self.rpc_url[:50]}...", flush=True)
         try:
             n = self.w3.eth.block_number
-            print(f"✅ RPC OK. Блок: {n}")
+            print(f"✅ RPC OK. Блок: {n}", flush=True)
             return
         except Exception as e:
-            print(f"⚠️ QuickNode: {e}")
+            print(f"⚠️ QuickNode: {e}", flush=True)
 
         if USE_FALLBACK_ENDPOINT and GETBLOCK_BSC_NODE:
-            print("⚠️ Спробуємо GetBlock...")
+            print("⚠️ Спробуємо GetBlock...", flush=True)
             try:
                 self.rpc_url = GETBLOCK_BSC_NODE.rstrip("/")
                 self.w3 = Web3(Web3.HTTPProvider(self.rpc_url, request_kwargs={"timeout": 30}))
                 n = self.w3.eth.block_number
-                print(f"✅ GetBlock OK. Блок: {n}")
+                print(f"✅ GetBlock OK. Блок: {n}", flush=True)
                 return
             except Exception as e2:
-                print(f"❌ GetBlock: {e2}")
+                print(f"❌ GetBlock: {e2}", flush=True)
         raise ConnectionError("Не вдалося підключитися до RPC")
 
     def get_latest_block(self) -> Optional[int]:
         try:
             return self.w3.eth.block_number
         except Exception as e:
-            print(f"❌ get_latest_block: {e}")
+            print(f"❌ get_latest_block: {e}", flush=True)
             return None
 
     # =====================================================
@@ -89,56 +86,54 @@ class BSCscanClient:
     # =====================================================
 
     def run_diagnostic(self) -> bool:
-        print(f"\n{'='*60}")
-        print(f"🧪 ДІАГНОСТИКА")
-        print(f"{'='*60}")
+        print(f"\n{'='*60}", flush=True)
+        print(f"🧪 ДІАГНОСТИКА", flush=True)
+        print(f"{'='*60}", flush=True)
 
         latest = self.get_latest_block()
         if not latest:
-            print("❌ Не вдалося отримати блок")
+            print("❌ Не вдалося отримати блок", flush=True)
             return False
 
-        print(f"📦 Останній блок: {latest}")
+        print(f"📦 Останній блок: {latest}", flush=True)
 
-        # Тест 1: BSCScan API
-        print(f"\n--- Тест BSCScan API ---")
-        bscscan_ok = self._test_bscscan_api(latest)
+        # Тест 1: Etherscan V2 API
+        if BSCSCAN_API_KEY:
+            print(f"\n--- Тест Etherscan V2 API (chainid=56) ---", flush=True)
+            etherscan_ok = self._test_etherscan_v2(latest)
 
-        if bscscan_ok:
-            self.use_bscscan_api = True
-            print(f"✅ Метод: BSCScan API")
-        else:
-            self.use_bscscan_api = False
-            print(f"⚠️ BSCScan API недоступний, використовуємо RPC")
+            if etherscan_ok:
+                self.use_etherscan = True
+                print(f"✅ Метод: Etherscan V2 API", flush=True)
+                print(f"{'='*60}", flush=True)
+                return True
 
-            # Тест 2: RPC (get_logs без topics[2])
-            print(f"\n--- Тест RPC (get_logs) ---")
-            self._test_rpc(latest)
+        # Тест 2: RPC
+        self.use_etherscan = False
+        print(f"\n--- Тест RPC (get_logs) ---", flush=True)
+        self._test_rpc(latest)
+        print(f"🌐 Метод: QuickNode RPC", flush=True)
 
-        print(f"\n{'='*60}")
+        print(f"{'='*60}", flush=True)
         return True
 
-    def _test_bscscan_api(self, latest_block: int) -> bool:
+    def _test_etherscan_v2(self, latest_block: int) -> bool:
         from_block = max(0, latest_block - 10000)
-        print(f"🔍 BSCScan API: блоки {from_block}-{latest_block}...")
+        print(f"🔍 Etherscan V2: блоки {from_block}-{latest_block}...", flush=True)
 
-        try:
-            txs = self._bscscan_get_transfers(from_block, latest_block)
-            if txs is None:
-                print(f"   ❌ BSCScan API не відповідає")
-                return False
-
-            print(f"   📋 Знайдено {len(txs)} вхідних USDT")
-            for tx in txs[-3:]:
-                amount = int(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
-                print(f"   💰 Блок {tx.get('blockNumber')}: {amount:.2f} USDT від {tx.get('from', '')[:16]}...")
-            return True
-        except Exception as e:
-            print(f"   ❌ {e}")
+        txs = self._etherscan_get_transfers(from_block, latest_block)
+        if txs is None:
+            print(f"   ❌ Etherscan V2 не працює для BSC", flush=True)
             return False
 
+        print(f"   📋 Знайдено {len(txs)} вхідних USDT", flush=True)
+        for tx in txs[-3:]:
+            amount = int(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
+            print(f"   💰 Блок {tx.get('blockNumber')}: {amount:.2f} USDT від {tx.get('from', '')[:16]}...", flush=True)
+        return True
+
     def _test_rpc(self, latest_block: int):
-        print(f"🔍 RPC get_logs для блоку {latest_block} (всі USDT події)...")
+        print(f"🔍 RPC get_logs для блоку {latest_block} (всі USDT події)...", flush=True)
         try:
             logs = self.w3.eth.get_logs({
                 "fromBlock": latest_block,
@@ -146,24 +141,24 @@ class BSCscanClient:
                 "address": self.usdt_contract,
                 "topics": [TRANSFER_EVENT_TOPIC],
             })
-            print(f"   📋 Блок {latest_block}: {len(logs)} USDT подій")
+            print(f"   📋 Блок {latest_block}: {len(logs)} USDT подій", flush=True)
 
-            our_txs = 0
+            our_count = 0
             for lg in logs:
                 topics = lg.get("topics", [])
                 if len(topics) >= 3:
                     to_addr = _extract_address(topics[2])
                     if to_addr == self.wallet_lower:
-                        our_txs += 1
+                        our_count += 1
                         data_hex = _to_hex(lg.get("data", "0x0"))
                         value = int(data_hex, 16) if data_hex and data_hex != "0x" else 0
-                        print(f"   💰 НАШ ПЛАТІЖ! {value/1e18:.2f} USDT")
+                        print(f"   💰 НАШ ПЛАТІЖ! {value/1e18:.2f} USDT", flush=True)
 
-            if our_txs == 0:
-                print(f"   ℹ️ Немає наших транзакцій у цьому блоці (нормально)")
-            print(f"   ✅ RPC працює!")
+            if our_count == 0:
+                print(f"   ℹ️ Немає наших транзакцій у цьому блоці (нормально)", flush=True)
+            print(f"   ✅ RPC працює!", flush=True)
         except Exception as e:
-            print(f"   ⚠️ RPC помилка: {e}")
+            print(f"   ⚠️ RPC помилка: {e}", flush=True)
 
     # =====================================================
     #  ПОШУК ТРАНЗАКЦІЙ
@@ -178,15 +173,15 @@ class BSCscanClient:
 
         block_count = end_block - start_block + 1
 
-        if self.use_bscscan_api:
-            print(f"🔍 BSCScan API: блоки {start_block}-{end_block} ({block_count})")
-            txs = self._bscscan_get_transfers(start_block, end_block)
+        if self.use_etherscan:
+            print(f"🔍 Etherscan V2: блоки {start_block}-{end_block} ({block_count})", flush=True)
+            txs = self._etherscan_get_transfers(start_block, end_block)
             if txs is not None:
                 self._log_found(txs)
                 return txs
-            print(f"   ⚠️ BSCScan не відповів, переключаюсь на RPC...")
+            print(f"   ⚠️ Etherscan не відповів, RPC...", flush=True)
 
-        print(f"🔍 RPC: блоки {start_block}-{end_block} ({block_count})")
+        print(f"🔍 RPC: блоки {start_block}-{end_block} ({block_count})", flush=True)
         txs = self._rpc_get_transfers(start_block, end_block)
         self._log_found(txs)
         return txs
@@ -195,17 +190,18 @@ class BSCscanClient:
         if txs:
             for tx in txs:
                 amount = int(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
-                print(f"   💰 Блок {tx.get('blockNumber')}: {amount:.2f} USDT від {tx.get('from', '')[:16]}...")
-        print(f"   ✅ Знайдено {len(txs)} вхідних USDT транзакцій")
+                print(f"   💰 Блок {tx.get('blockNumber')}: {amount:.2f} USDT від {tx.get('from', '')[:16]}...", flush=True)
+        print(f"   ✅ Знайдено {len(txs)} вхідних USDT транзакцій", flush=True)
 
     # =====================================================
-    #  МЕТОД 1: BSCScan API
+    #  МЕТОД 1: Etherscan API V2
     # =====================================================
 
-    def _bscscan_get_transfers(
+    def _etherscan_get_transfers(
         self, start_block: int, end_block: int
     ) -> Optional[List[Dict]]:
         params = {
+            "chainid": 56,
             "module": "account",
             "action": "tokentx",
             "contractaddress": USDT_CONTRACT_BSC,
@@ -215,12 +211,11 @@ class BSCscanClient:
             "page": 1,
             "offset": 100,
             "sort": "asc",
+            "apikey": BSCSCAN_API_KEY,
         }
-        if BSCSCAN_API_KEY:
-            params["apikey"] = BSCSCAN_API_KEY
 
         try:
-            resp = http_requests.get(BSCSCAN_API_URL, params=params, timeout=30)
+            resp = http_requests.get(ETHERSCAN_V2_URL, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
 
@@ -234,30 +229,27 @@ class BSCscanClient:
                     if tx.get("to", "").lower() == self.wallet_lower
                 ]
 
-            if message == "No transactions found" or result == []:
+            if message == "No transactions found" or (status == "0" and isinstance(result, list) and result == []):
                 return []
 
             if isinstance(result, str):
-                if "rate limit" in result.lower():
-                    print(f"   ⚠️ BSCScan rate limit")
-                    return None
-                if "api" in result.lower() and ("v2" in result.lower() or "deprecated" in result.lower()):
-                    print(f"   ❌ BSCScan API закритий: {result}")
-                    self.use_bscscan_api = False
-                    return None
+                print(f"   ⚠️ Etherscan V2: {result}", flush=True)
+                if "paid" in result.lower() or "upgrade" in result.lower() or "not supported" in result.lower():
+                    self.use_etherscan = False
+                return None
 
-            print(f"   ⚠️ BSCScan: status={status}, msg={message}")
+            print(f"   ⚠️ Etherscan V2: status={status}, msg={message}", flush=True)
             return None
 
         except http_requests.exceptions.ConnectionError:
-            print(f"   ❌ BSCScan: з'єднання не вдалося")
+            print(f"   ❌ Etherscan V2: з'єднання не вдалося", flush=True)
             return None
         except Exception as e:
-            print(f"   ❌ BSCScan: {e}")
+            print(f"   ❌ Etherscan V2: {e}", flush=True)
             return None
 
     # =====================================================
-    #  МЕТОД 2: RPC (QuickNode) — без topics[2], фільтрація в Python
+    #  МЕТОД 2: RPC — без topics[2], фільтрація в Python
     # =====================================================
 
     def _rpc_get_transfers(
@@ -265,11 +257,9 @@ class BSCscanClient:
     ) -> List[Dict]:
         """
         Отримує ВСІ USDT Transfer логи і фільтрує для нашого гаманця в Python.
-        topics[2] фільтрація не працює на QuickNode BSC free tier.
-        Скануємо по 1 блоку щоб уникнути 413.
+        По 1 блоку щоб уникнути 413.
         """
         all_txs = []
-        blocks_scanned = 0
 
         for bn in range(start_block, end_block + 1):
             try:
@@ -296,11 +286,9 @@ class BSCscanClient:
             except Exception as e:
                 err_str = str(e).lower()
                 if "413" in err_str or "too large" in err_str:
-                    print(f"      ⚠️ Блок {bn}: 413 (забагато даних)")
+                    print(f"      ⚠️ Блок {bn}: 413", flush=True)
                 else:
-                    print(f"      ⚠️ Блок {bn}: {e}")
-
-            blocks_scanned += 1
+                    print(f"      ⚠️ Блок {bn}: {e}", flush=True)
 
             if bn < end_block:
                 time.sleep(0.5)
@@ -332,7 +320,7 @@ class BSCscanClient:
                 "contractAddress": USDT_CONTRACT_BSC,
             }
         except Exception as e:
-            print(f"   ⚠️ _parse_log: {e}")
+            print(f"   ⚠️ _parse_log: {e}", flush=True)
             return None
 
     # =====================================================

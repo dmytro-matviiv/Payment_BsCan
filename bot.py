@@ -126,7 +126,7 @@ class PaymentMonitorBot:
             print(f"⏱️ Інтервал: {CHECK_INTERVAL // 60} хв ({CHECK_INTERVAL} сек)")
         else:
             print(f"⏱️ Інтервал: {CHECK_INTERVAL} сек")
-        method = "BSCScan API" if self.bscscan.use_bscscan_api else "QuickNode RPC"
+        method = "Etherscan V2 API" if self.bscscan.use_etherscan else "QuickNode RPC"
         print(f"🌐 Метод: {method}")
         print("=" * 60)
         print("Натисніть Ctrl+C для зупинки\n")
