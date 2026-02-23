@@ -1,42 +1,50 @@
 """
-Тестовий скрипт для перевірки роботи QuickNode BSC API
+Тестовий скрипт для перевірки BSCScan API
 """
 from bscscan_client import BSCscanClient
 from config import WALLET_ADDRESS
 
+
 def test_api():
-    """Тестування QuickNode BSC API"""
     print("=" * 50)
-    print("ТЕСТ ПІДКЛЮЧЕННЯ ДО QUICKNODE BSC")
+    print("ТЕСТ BSCScan API")
     print("=" * 50)
-    print(f"📍 Адреса гаманця: {WALLET_ADDRESS}")
+    print(f"📍 Адреса: {WALLET_ADDRESS}")
     print()
-    
+
     client = BSCscanClient()
+
     latest_block = client.get_latest_block()
     if not latest_block:
         print("❌ Не вдалося отримати останній блок")
         return
     print(f"✅ Останній блок: {latest_block}")
     print()
-    
-    print("Тест пошуку USDT транзакцій (останні 50 блоків)...")
+
+    print("🧪 Запуск діагностики...")
+    client.run_diagnostic()
+    print()
+
+    print("🔍 Пошук USDT за останні 100 блоків...")
     transactions = client.get_token_transactions(
-        start_block=latest_block - 49,
+        start_block=latest_block - 99,
         end_block=latest_block
     )
-    
+
     if transactions:
-        print(f"✅ Знайдено {len(transactions)} транзакцій USDT")
-        last_tx = transactions[0]
-        formatted = client.format_transaction(last_tx)
-        print(f"📄 Hash: {last_tx.get('hash', '')}")
-        print(f"💰 Сума: {formatted['amount']:.2f} {formatted['symbol']}")
-        print(f"📤 Від: {formatted['from_address']}")
-        print(f"📥 До: {formatted['to_address']}")
+        print(f"\n✅ Знайдено {len(transactions)} транзакцій")
+        tx = transactions[-1]
+        formatted = client.format_transaction(tx)
+        print(f"📄 Остання:")
+        print(f"   Hash: {formatted['hash']}")
+        print(f"   Сума: {formatted['amount']:.2f} {formatted['symbol']}")
+        print(f"   Від: {formatted['from_address']}")
+        print(f"   Час: {formatted['timestamp']}")
     else:
-        print("Транзакції не знайдено (можливо немає в останніх 50 блоках)")
+        print("ℹ️ Транзакцій не знайдено за останні 100 блоків")
+
     print("=" * 50)
+
 
 if __name__ == "__main__":
     test_api()
