@@ -321,6 +321,13 @@ class BSCscanClient:
             if not tx_hash.startswith("0x"):
                 tx_hash = "0x" + tx_hash
 
+            timestamp = 0
+            try:
+                block = self.w3.eth.get_block(block_num)
+                timestamp = block.get("timestamp", 0) if block else 0
+            except Exception:
+                pass
+
             return {
                 "hash": tx_hash,
                 "from": from_addr,
@@ -328,7 +335,7 @@ class BSCscanClient:
                 "value": str(value),
                 "tokenSymbol": "USDT",
                 "tokenDecimal": "18",
-                "timeStamp": "0",
+                "timeStamp": str(timestamp),
                 "blockNumber": str(block_num),
                 "contractAddress": USDT_CONTRACT_BSC,
             }
@@ -346,8 +353,11 @@ class BSCscanClient:
         amount = value / (10 ** decimals)
 
         ts = int(tx.get("timeStamp", 0))
-        from datetime import datetime
-        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+        time_str = "N/A"
+        if ts:
+            from datetime import datetime, timezone, timedelta
+            kyiv_tz = timezone(timedelta(hours=2))
+            time_str = datetime.fromtimestamp(ts, tz=kyiv_tz).strftime("%Y-%m-%d %H:%M:%S (Київ)")
 
         return {
             "hash": tx.get("hash", ""),
