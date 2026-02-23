@@ -261,12 +261,8 @@ class BSCscanClient:
         Якщо 413 — зменшує розмір чанку.
         """
         all_txs = []
-        chunk_size = 5
+        chunk_size = 20
         pos = start_block
-        total_events = 0
-        total_errors = 0
-        chunks_ok = 0
-        debug_shown = 0
 
         while pos <= end_block:
             chunk_end = min(pos + chunk_size - 1, end_block)
@@ -279,20 +275,12 @@ class BSCscanClient:
                     "topics": [TRANSFER_EVENT_TOPIC],
                 })
 
-                chunks_ok += 1
-                total_events += len(logs)
-
                 for lg in logs:
                     topics = lg.get("topics", [])
                     if len(topics) < 3:
                         continue
 
                     to_addr = _extract_address(topics[2])
-
-                    if debug_shown < 3:
-                        debug_shown += 1
-                        print(f"      DEBUG event to={to_addr}, our={self.wallet_lower}", flush=True)
-
                     if to_addr != self.wallet_lower:
                         continue
 
@@ -301,26 +289,23 @@ class BSCscanClient:
                     if tx:
                         all_txs.append(tx)
                         amount = int(tx["value"]) / 1e18
-                        print(f"      🎯 ЗНАЙДЕНО! Блок {bn}: {amount:.2f} USDT", flush=True)
+                        print(f"      🎯 Блок {bn}: {amount:.2f} USDT", flush=True)
 
                 pos = chunk_end + 1
 
             except Exception as e:
-                total_errors += 1
                 err_str = str(e).lower()
-                print(f"      ⚠️ Чанк {pos}-{chunk_end}: {e}", flush=True)
-
                 if ("413" in err_str or "too large" in err_str) and chunk_size > 1:
                     chunk_size = max(1, chunk_size // 2)
-                    print(f"      🔄 Зменшую чанк до {chunk_size}", flush=True)
+                    print(f"      ⚠️ 413 — чанк → {chunk_size}", flush=True)
                     continue
 
+                print(f"      ⚠️ {pos}-{chunk_end}: {e}", flush=True)
                 pos = chunk_end + 1
 
             if pos <= end_block:
-                time.sleep(0.5)
+                time.sleep(0.3)
 
-        print(f"   📊 Статистика: {chunks_ok} чанків OK, {total_events} USDT подій, {total_errors} помилок", flush=True)
         return all_txs
 
     def _parse_log_rpc(self, lg: Any, block_num: int) -> Optional[Dict]:
