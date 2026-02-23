@@ -7,7 +7,7 @@ from config import WALLET_ADDRESS
 
 def test_api():
     print("=" * 50)
-    print("ТЕСТ BSCScan API")
+    print("ТЕСТ BScan API")
     print("=" * 50)
     print(f"📍 Адреса: {WALLET_ADDRESS}")
     print()
