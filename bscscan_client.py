@@ -257,18 +257,30 @@ class BSCscanClient:
     ) -> List[Dict]:
         """
         Отримує ВСІ USDT Transfer логи і фільтрує для нашого гаманця в Python.
-        По 1 блоку щоб уникнути 413.
+        Спочатку пробує чанки по 5 блоків (5x менше API calls).
+        Якщо 413 — зменшує розмір чанку.
         """
         all_txs = []
+        chunk_size = 5
+        pos = start_block
+        total_events = 0
+        total_errors = 0
+        chunks_ok = 0
+        debug_shown = 0
 
-        for bn in range(start_block, end_block + 1):
+        while pos <= end_block:
+            chunk_end = min(pos + chunk_size - 1, end_block)
+
             try:
                 logs = self.w3.eth.get_logs({
-                    "fromBlock": bn,
-                    "toBlock": bn,
+                    "fromBlock": pos,
+                    "toBlock": chunk_end,
                     "address": self.usdt_contract,
                     "topics": [TRANSFER_EVENT_TOPIC],
                 })
+
+                chunks_ok += 1
+                total_events += len(logs)
 
                 for lg in logs:
                     topics = lg.get("topics", [])
@@ -276,23 +288,39 @@ class BSCscanClient:
                         continue
 
                     to_addr = _extract_address(topics[2])
+
+                    if debug_shown < 3:
+                        debug_shown += 1
+                        print(f"      DEBUG event to={to_addr}, our={self.wallet_lower}", flush=True)
+
                     if to_addr != self.wallet_lower:
                         continue
 
+                    bn = lg.get("blockNumber", pos)
                     tx = self._parse_log_rpc(lg, bn)
                     if tx:
                         all_txs.append(tx)
+                        amount = int(tx["value"]) / 1e18
+                        print(f"      🎯 ЗНАЙДЕНО! Блок {bn}: {amount:.2f} USDT", flush=True)
+
+                pos = chunk_end + 1
 
             except Exception as e:
+                total_errors += 1
                 err_str = str(e).lower()
-                if "413" in err_str or "too large" in err_str:
-                    print(f"      ⚠️ Блок {bn}: 413", flush=True)
-                else:
-                    print(f"      ⚠️ Блок {bn}: {e}", flush=True)
+                print(f"      ⚠️ Чанк {pos}-{chunk_end}: {e}", flush=True)
 
-            if bn < end_block:
+                if ("413" in err_str or "too large" in err_str) and chunk_size > 1:
+                    chunk_size = max(1, chunk_size // 2)
+                    print(f"      🔄 Зменшую чанк до {chunk_size}", flush=True)
+                    continue
+
+                pos = chunk_end + 1
+
+            if pos <= end_block:
                 time.sleep(0.5)
 
+        print(f"   📊 Статистика: {chunks_ok} чанків OK, {total_events} USDT подій, {total_errors} помилок", flush=True)
         return all_txs
 
     def _parse_log_rpc(self, lg: Any, block_num: int) -> Optional[Dict]:
