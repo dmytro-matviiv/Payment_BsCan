@@ -6,7 +6,7 @@
 BSCSCAN_API_KEY = "JPREGPZ5WZ7VZJIRGACDSWZBQKGHUYZTKE"
 
 # === QuickNode RPC ===
-QUICKNODE_BSC_NODE = "https://clean-magical-season.bsc.quiknode.pro/df5393b39afc0e2be5e6bd805bb6f86eba2a8514"
+QUICKNODE_BSC_NODE = "https://still-orbital-snow.bsc.quiknode.pro/e60ffc8002adabba4d011e493be35d07d4f9ca26/"
 GETBLOCK_BSC_NODE = "https://go.getblock.us/6331e58511e54706be53c9b4d8ce9ad2"
 
 # Адреса гаманця для моніторингу
