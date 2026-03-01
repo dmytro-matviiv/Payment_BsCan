@@ -1,6 +1,6 @@
 """
 Бот для моніторингу USDT платежів на BSC.
-Використовує BSCScan API для надійного пошуку транзакцій.
+Використовує RPC (QuickNode/GetBlock) для пошуку транзакцій.
 """
 import time
 import json
@@ -126,8 +126,7 @@ class PaymentMonitorBot:
             print(f"⏱️ Інтервал: {CHECK_INTERVAL // 60} хв ({CHECK_INTERVAL} сек)")
         else:
             print(f"⏱️ Інтервал: {CHECK_INTERVAL} сек")
-        method = "Etherscan V2 API" if self.bscscan.use_etherscan else "QuickNode RPC"
-        print(f"🌐 Метод: {method}")
+        print("🌐 Метод: RPC (QuickNode/GetBlock)")
         print("=" * 60)
         print("Натисніть Ctrl+C для зупинки\n")
 

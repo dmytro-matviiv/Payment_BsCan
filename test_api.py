@@ -1,5 +1,5 @@
 """
-Тестовий скрипт для перевірки BSCScan API
+Тестовий скрипт для перевірки RPC-моніторингу BSC
 """
 from bscscan_client import BSCscanClient
 from config import WALLET_ADDRESS
@@ -7,7 +7,7 @@ from config import WALLET_ADDRESS
 
 def test_api():
     print("=" * 50)
-    print("ТЕСТ BScan API")
+    print("ТЕСТ BSC RPC")
     print("=" * 50)
     print(f"📍 Адреса: {WALLET_ADDRESS}")
     print()
