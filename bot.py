@@ -5,6 +5,8 @@
 import time
 import json
 from typing import Set, Optional
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from bscscan_client import BSCscanClient
 from telegram_bot import TelegramBot
 from config import WALLET_ADDRESS, CHECK_INTERVAL, MIN_AMOUNT_USDT, TOKEN_SYMBOL
@@ -16,9 +18,42 @@ class PaymentMonitorBot:
         self.telegram = TelegramBot()
         self.processed_txs: Set[str] = set()
         self.start_block: Optional[int] = None
+        self.kyiv_tz = ZoneInfo("Europe/Kyiv")
+        self.quiet_start_hour = 1
+        self.quiet_end_hour = 9
+        self.is_quiet_mode = False
         self.load_processed_txs()
         self.bscscan.run_diagnostic()
         self.init_start_block()
+
+    def _now_kyiv(self) -> datetime:
+        return datetime.now(self.kyiv_tz)
+
+    def _is_quiet_hours(self, now_kyiv: datetime) -> bool:
+        return self.quiet_start_hour <= now_kyiv.hour < self.quiet_end_hour
+
+    def _send_status_message(self, text: str):
+        try:
+            self.telegram.send_message(text)
+        except Exception as e:
+            print(f"⚠️ Не вдалося надіслати системне повідомлення: {e}")
+
+    def _seconds_to_next_transition(self, now_kyiv: datetime, is_quiet: bool) -> int:
+        if is_quiet:
+            transition = now_kyiv.replace(
+                hour=self.quiet_end_hour, minute=0, second=0, microsecond=0
+            )
+            if transition <= now_kyiv:
+                transition = transition + timedelta(days=1)
+        else:
+            transition = now_kyiv.replace(
+                hour=self.quiet_start_hour, minute=0, second=0, microsecond=0
+            )
+            if transition <= now_kyiv:
+                transition = transition + timedelta(days=1)
+
+        seconds = int((transition - now_kyiv).total_seconds())
+        return max(1, seconds)
 
     def load_processed_txs(self):
         try:
@@ -127,13 +162,40 @@ class PaymentMonitorBot:
         else:
             print(f"⏱️ Інтервал: {CHECK_INTERVAL} сек")
         print("🌐 Метод: RPC (QuickNode/GetBlock)")
+        print("🕐 Тихий період (Київ): 01:00-09:00")
         print("=" * 60)
         print("Натисніть Ctrl+C для зупинки\n")
 
         try:
             while True:
+                now_kyiv = self._now_kyiv()
+                in_quiet = self._is_quiet_hours(now_kyiv)
+
+                if in_quiet:
+                    if not self.is_quiet_mode:
+                        self.is_quiet_mode = True
+                        self._send_status_message(
+                            "🌙 01:00 (Київ): моніторинг призупинено до 09:00."
+                        )
+                        print("🌙 Тихий період: моніторинг призупинено до 09:00 (Київ)")
+
+                    sleep_seconds = self._seconds_to_next_transition(now_kyiv, is_quiet=True)
+                    time.sleep(sleep_seconds)
+                    continue
+
+                if self.is_quiet_mode:
+                    self.is_quiet_mode = False
+                    self._send_status_message(
+                        "🌅 09:00 (Київ): моніторинг відновлено, продовжую роботу."
+                    )
+                    print("🌅 Моніторинг відновлено о 09:00 (Київ)")
+
                 self.check_new_transactions()
-                time.sleep(CHECK_INTERVAL)
+                now_after_check = self._now_kyiv()
+                sleep_seconds = min(
+                    CHECK_INTERVAL, self._seconds_to_next_transition(now_after_check, is_quiet=False)
+                )
+                time.sleep(sleep_seconds)
         except KeyboardInterrupt:
             print("\n\n🛑 Бот зупинено")
             self.save_processed_txs()
