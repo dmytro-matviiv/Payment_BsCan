@@ -21,7 +21,7 @@ GETBLOCK_BSC_NODE = os.getenv(
 )
 
 # Адреса гаманця для моніторингу
-WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0x11b28a56e407d7b89ee1ecf1d1f9748de3fee57b")
+WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xCEB8658255151827b3fc99d257471120413d0f28")
 
 # Telegram налаштування
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8456055614:AAFeuIrPgQKDdfl_e9ULHi1oAJimxkaeLWM")
