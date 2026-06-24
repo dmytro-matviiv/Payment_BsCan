@@ -13,7 +13,7 @@ def _env_bool(name: str, default: bool) -> bool:
 # Моніторинг працює тільки через RPC, без BSCScan/Etherscan API.
 QUICKNODE_BSC_NODE = os.getenv(
     "QUICKNODE_BSC_NODE",
-    "https://responsive-ancient-vineyard.bsc.quiknode.pro/b2b5e3b06f89270f7b4f2de29681f7d8358f85d0/",
+    "https://falling-winter-thunder.bsc.quiknode.pro/489dfaf9c0eac23d975db223e0aa7ffcf2d493be/",
 )
 GETBLOCK_BSC_NODE = os.getenv(
     "GETBLOCK_BSC_NODE",
