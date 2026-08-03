@@ -4,7 +4,7 @@
 # BSCscan налаштування (Etherscan API V2)
 # Варіант 1: Etherscan API V2 (потрібна платна підписка для BSC)
 BSCSCAN_API_KEY = "YOUR_BSCSCAN_API_KEY"  # Отримайте на https://etherscan.io/myapikey
-WALLET_ADDRESS = "0xCEB8658255151827b3fc99d257471120413d0f28"
+WALLET_ADDRESS = "0x67166a3d18670e9f386Ec9DfC18e81F328BaEA3e"
 BSCSCAN_API_URL = "https://api.etherscan.io/api"  # Etherscan API V2
 CHAIN_ID = "56"  # Chain ID для BSC (Binance Smart Chain)
 

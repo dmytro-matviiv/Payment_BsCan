@@ -13,7 +13,7 @@ def _env_bool(name: str, default: bool) -> bool:
 # Моніторинг працює тільки через RPC, без BSCScan/Etherscan API.
 QUICKNODE_BSC_NODE = os.getenv(
     "QUICKNODE_BSC_NODE",
-    "https://capable-thrumming-arrow.bsc.quiknode.pro/50a528251443b4e4c33d660d06c46d12e77e375c/",
+    "https://blissful-thrilling-slug.bsc.quiknode.pro/4bc849b721e4fa51edc5d7fd32108dc88ecbecc9/",
 )
 GETBLOCK_BSC_NODE = os.getenv(
     "GETBLOCK_BSC_NODE",
@@ -21,7 +21,7 @@ GETBLOCK_BSC_NODE = os.getenv(
 )
 
 # Адреса гаманця для моніторингу
-WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0xCEB8658255151827b3fc99d257471120413d0f28")
+WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0x67166a3d18670e9f386Ec9DfC18e81F328BaEA3e")
 
 # Telegram налаштування
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8456055614:AAFeuIrPgQKDdfl_e9ULHi1oAJimxkaeLWM")
