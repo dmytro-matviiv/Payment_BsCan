@@ -25,8 +25,8 @@ GETBLOCK_BSC_NODE = os.getenv(
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0x67166a3d18670e9f386Ec9DfC18e81F328BaEA3e")
 
 # Telegram налаштування
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8456055614:AAFeuIrPgQKDdfl_e9ULHi1oAJimxkaeLWM")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@payment_trc20_001")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8867231877:AAH6T6SKHNo7fTpACCyfWlr4RrLTBv1ai5E")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1003903485012")
 
 # Налаштування моніторингу
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "180"))  # Інтервал перевірки (секунди) — 3 хвилини
